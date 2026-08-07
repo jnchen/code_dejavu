@@ -5,6 +5,8 @@ Claude Code、Codex CLI 与 OpenCode 留在本机的会话、指令和配置资�
 
 ![Code Déjà Vu 控制台主页](dashboard_snapshot.png)
 
+[📖 操作指南](docs/USER_GUIDE.md) · [⬇️ 下载最新版](https://github.com/jnchen/code_dejavu/releases/latest)
+
 > 项目仍在早期阶段。使用会修改本地配置或归档资料的功能前，请先备份相关目录。
 
 ## 功能
