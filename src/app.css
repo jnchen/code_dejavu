@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #ffffff;
+  --color-bg-secondary: #f8f9fa;
+  --color-bg-tertiary: #f1f3f5;
+  --color-bg-hover: #e9ecef;
+  --color-bg-active: #dee2e6;
+  --color-border: #dee2e6;
+  --color-border-subtle: #e9ecef;
+  --color-border-hover: #adb5bd;
+  --color-text: #212529;
+  --color-text-secondary: #495057;
+  --color-text-muted: #868e96;
+  --color-accent: #5c6bc0;
+  --color-accent-hover: #3f51b5;
+  --color-accent-dim: #eef0fb;
+  --color-success: #2e7d32;
+  --color-success-dim: #e8f5e9;
+  --color-warning: #f57f17;
+  --color-warning-dim: #fff8e1;
+  --color-danger: #d32f2f;
+  --color-danger-hover: #c62828;
+  --color-danger-dim: #ffebee;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+}
+
+/* Dark theme: override the @theme color tokens. Higher specificity than :root so it wins.
+   Every utility references var(--color-*), so flipping these values re-themes the whole app. */
+html.dark {
+  --color-bg: #1a1b1e;
+  --color-bg-secondary: #25262b;
+  --color-bg-tertiary: #2c2e33;
+  --color-bg-hover: #2e3035;
+  --color-bg-active: #373a40;
+  --color-border: #373a40;
+  --color-border-subtle: #2c2e33;
+  --color-border-hover: #5c5f66;
+  --color-text: #e9ecef;
+  --color-text-secondary: #c1c2c5;
+  --color-text-muted: #909296;
+  --color-accent: #7c84d8;
+  --color-accent-hover: #9aa0e0;
+  --color-accent-dim: #2a2d4a;
+  --color-success: #51cf66;
+  --color-success-dim: #1c3a23;
+  --color-warning: #fcc419;
+  --color-warning-dim: #3a3116;
+  --color-danger: #ff6b6b;
+  --color-danger-hover: #ff8787;
+  --color-danger-dim: #3a1f22;
+}
+
+@layer base {
+  *, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html, body {
+    height: 100%;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    background: var(--color-bg);
+    color: var(--color-text);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+  ::selection { background: var(--color-accent); color: white; }
+}

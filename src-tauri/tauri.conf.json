@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Code Déjà Vu",
+  "version": "0.2.3",
+  "identifier": "io.github.jnchen.code-dejavu",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Code Déjà Vu",
+        "width": 1100,
+        "height": 700,
+        "minWidth": 800,
+        "minHeight": 500
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlDNzlDNEQ3MzZFNjhCRkYKUldUL2krWTIxOFI1bkVYVTlya3JLbVBXZTk1L21qUnVuTTMrVjhyMFBCY2RyVUMrZWNXbHoxTDIK",
+      "endpoints": [
+        "https://github.com/jnchen/code_dejavu/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

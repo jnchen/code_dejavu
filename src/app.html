@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%sveltekit.assets%/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Code Déjà Vu</title>
+    <script>
+      // Resolve the theme BEFORE first paint to avoid a light→dark flash (FOUC). An explicit saved
+      // choice wins; otherwise follow the OS `prefers-color-scheme`. Must mirror the logic in
+      // +layout.svelte so hydration doesn't disagree with this pre-paint decision.
+      try {
+        var saved = localStorage.getItem("dejavu-theme");
+        var dark = saved
+          ? saved === "dark"
+          : !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+      } catch (e) {}
+    </script>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>
