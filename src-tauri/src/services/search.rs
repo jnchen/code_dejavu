@@ -1352,9 +1352,9 @@ const MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(64);
 const WRITE_SETTLE_WINDOW: Duration = Duration::from_secs(16);
 
 pub fn spawn_auto_refresh(engine: SharedSearchEngine, providers: Vec<Arc<dyn AgentProvider>>) {
-    if providers.iter().all(|p| p.data_roots().is_empty()) {
-        return;
-    }
+    // Not "are there roots now?" — a provider can gain roots after startup (a WSL install is
+    // adopted once discovery finishes), and a machine whose agents all live in WSL has none at
+    // this point. Giving up here would leave exactly that machine without auto-refresh.
     std::thread::spawn(move || {
         // The initial index builder already walks the same roots. Wait for it to finish instead of
         // doubling startup disk traffic, which can starve page loads on large histories.

@@ -1,10 +1,13 @@
 mod agents;
 mod commands;
 mod error;
+mod hosts;
 mod models;
 mod paths;
 mod safe_path;
 mod services;
+#[cfg(test)]
+mod smoke;
 
 use paths::ClaudePaths;
 
@@ -24,13 +27,20 @@ pub fn run() {
 
     let claude_paths = ClaudePaths::new();
 
-    let providers = agents::default_providers(claude_paths.clone());
+    let multi_hosts = agents::default_providers(claude_paths.clone());
+    let providers: Vec<std::sync::Arc<dyn agents::AgentProvider>> = multi_hosts
+        .iter()
+        .map(|provider| provider.clone() as std::sync::Arc<dyn agents::AgentProvider>)
+        .collect();
     let registry = agents::ProviderRegistry::new(providers.clone());
 
     // Global search index: every provider contributes its own searchable documents.
     let search_engine = services::search::build_in_background(providers.clone());
     // Keep the index fresh when sessions change on disk (no app restart needed).
-    services::search::spawn_auto_refresh(search_engine.clone(), providers);
+    services::search::spawn_auto_refresh(search_engine.clone(), providers.clone());
+    // Agent installs inside WSL join the same sources once found — off the startup path, since
+    // reading a distro's share boots it.
+    spawn_wsl_discovery(multi_hosts, providers, search_engine.clone());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -89,4 +99,37 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Find agent installs inside WSL and fold them into the sources that already exist.
+///
+/// This runs on its own thread because the first read of `\\wsl.localhost\<distro>` starts that
+/// distro — acceptable when it happens behind an already-usable window, not while one is opening.
+/// Once hosts are adopted the index is rebuilt, so their sessions appear without a restart; the
+/// retry loop is there because the initial index build holds the indexing slot for a while.
+fn spawn_wsl_discovery(
+    multi_hosts: Vec<std::sync::Arc<agents::MultiHostProvider>>,
+    providers: Vec<std::sync::Arc<dyn agents::AgentProvider>>,
+    engine: services::search::SharedSearchEngine,
+) {
+    std::thread::spawn(move || {
+        let config = commands::shell::load_config();
+        if !config.wsl_scan {
+            return;
+        }
+        let homes = hosts::discover_wsl_homes(&config.wsl_excluded);
+        if homes.is_empty() {
+            return;
+        }
+        hosts::publish_wsl_homes(&homes);
+        for provider in &multi_hosts {
+            provider.adopt(&homes);
+        }
+        for _ in 0..60 {
+            if services::search::rebuild(&engine, &providers) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    });
 }

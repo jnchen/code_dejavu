@@ -4,7 +4,6 @@
 
 use crate::agents::ProviderRegistry;
 use crate::error::AppError;
-use crate::paths::ClaudePaths;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -47,12 +46,7 @@ pub struct ToolsInfo {
 }
 
 #[tauri::command]
-pub async fn list_tools(
-    paths: State<'_, ClaudePaths>,
-    registry: State<'_, ProviderRegistry>,
-) -> Result<ToolsInfo, AppError> {
-    let claude_json = paths.claude_json.clone();
-    let settings_json = paths.settings_json.clone();
+pub async fn list_tools(registry: State<'_, ProviderRegistry>) -> Result<ToolsInfo, AppError> {
     let sources = registry.sources();
     let providers = registry.providers();
     tauri::async_runtime::spawn_blocking(move || {
@@ -68,25 +62,30 @@ pub async fn list_tools(
                 mcp_source_paths: Vec::new(),
                 hooks_source_paths: Vec::new(),
             };
-            match source.id.as_str() {
-                "claude" => collect_claude(&claude_json, &settings_json, &mut info),
-                "codex" => {
-                    let roots = providers
-                        .iter()
-                        .find(|provider| provider.id() == "codex")
-                        .map(|provider| provider.instruction_project_roots())
-                        .unwrap_or_default();
-                    collect_codex(&home.join(".codex").join("config.toml"), &roots, &mut info);
+            let roots = providers
+                .iter()
+                .find(|provider| provider.id() == source.id)
+                .map(|provider| provider.instruction_project_roots())
+                .unwrap_or_default();
+            collect_for_home(&source.id, &home, &roots, &mut info);
+            // The same agent installed inside a WSL distro contributes its own servers and hooks;
+            // they are tagged with the host so two "global" scopes stay tellable apart.
+            for discovered in crate::hosts::known_wsl_homes() {
+                let Some(tag) = discovered.host.tag() else {
+                    continue;
+                };
+                let before = (info.mcp_servers.len(), info.hooks.len());
+                collect_for_home(&source.id, &discovered.home, &roots, &mut info);
+                for server in &mut info.mcp_servers[before.0..] {
+                    server.scope = format!("{} · {}", server.scope, tag);
                 }
-                "opencode" => {
-                    let roots = providers
-                        .iter()
-                        .find(|provider| provider.id() == "opencode")
-                        .map(|provider| provider.instruction_project_roots())
-                        .unwrap_or_default();
-                    collect_opencode(&home.join(".config").join("opencode"), &roots, &mut info);
+                for hook in &mut info.hooks[before.1..] {
+                    hook.matcher = if hook.matcher.is_empty() {
+                        tag.clone()
+                    } else {
+                        format!("{} · {}", hook.matcher, tag)
+                    };
                 }
-                _ => {}
             }
             sort_info(&mut info);
             result.push(info);
@@ -102,6 +101,21 @@ fn home() -> PathBuf {
         .or_else(|_| std::env::var("HOME"))
         .map(PathBuf::from)
         .unwrap_or_default()
+}
+
+/// Read one agent's tool configuration out of a specific home directory, so the same collectors
+/// serve this machine and every WSL install without any of them knowing hosts exist.
+fn collect_for_home(source: &str, home: &Path, roots: &[PathBuf], info: &mut AgentToolsInfo) {
+    match source {
+        "claude" => collect_claude(
+            &home.join(".claude.json"),
+            &home.join(".claude").join("settings.json"),
+            info,
+        ),
+        "codex" => collect_codex(&home.join(".codex").join("config.toml"), roots, info),
+        "opencode" => collect_opencode(&home.join(".config").join("opencode"), roots, info),
+        _ => {}
+    }
 }
 
 fn collect_claude(claude_json: &Path, settings_json: &Path, info: &mut AgentToolsInfo) {

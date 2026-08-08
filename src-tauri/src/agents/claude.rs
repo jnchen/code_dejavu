@@ -6,6 +6,7 @@ use super::{
     WorkflowItem,
 };
 use crate::error::AppError;
+use crate::hosts::Host;
 use crate::models::memory::{MemoryFile, MemoryFrontmatter, ProjectInfo};
 use crate::models::profile::ProfileArchive;
 use crate::models::rule::{RuleFile, RuleFrontmatter};
@@ -13,7 +14,7 @@ use crate::models::session::{
     push_model_context, PaginatedRecords, SessionModelInfo, SessionSearchHit, SessionSummary,
     SubagentInfo,
 };
-use crate::paths::{decode_project_slug, ClaudePaths};
+use crate::paths::ClaudePaths;
 use crate::services::{claude_archiver, claude_scanner, frontmatter, jsonl};
 use rayon::prelude::*;
 use serde_json::Value;
@@ -72,13 +73,22 @@ fn file_version(meta: &fs::Metadata) -> String {
 
 pub struct ClaudeProvider {
     paths: ClaudePaths,
+    /// Which machine this install lives on. Everything host-dependent — slug encoding, and turning
+    /// a recorded `cwd` into a path this process can open — goes through it, so a WSL install is
+    /// read correctly by a Windows build without any of it becoming a compile-time `cfg`.
+    host: Host,
     project_roots_cache: Mutex<Option<(Instant, Vec<PathBuf>)>>,
 }
 
 impl ClaudeProvider {
     pub fn new(paths: ClaudePaths) -> Self {
+        Self::for_host(Host::Native, paths)
+    }
+
+    pub fn for_host(host: Host, paths: ClaudePaths) -> Self {
         Self {
             paths,
+            host,
             project_roots_cache: Mutex::new(None),
         }
     }
@@ -97,7 +107,9 @@ impl ClaudeProvider {
             .join(format!("{}.jsonl", session_id))
     }
 
-    fn read_session_cwd(path: &Path) -> Option<PathBuf> {
+    /// The project directory a session ran in, as a path *this* process can open: a session
+    /// recorded inside WSL stores `/home/…`, which only resolves through the distro's UNC share.
+    fn read_session_cwd(path: &Path, host: &Host) -> Option<PathBuf> {
         let file = fs::File::open(path).ok()?;
         let reader = BufReader::with_capacity(32 * 1024, file);
         for line in reader.lines().map_while(Result::ok).take(80) {
@@ -110,7 +122,7 @@ impl ClaudeProvider {
             let Some(cwd) = value.get("cwd").and_then(|cwd| cwd.as_str()) else {
                 continue;
             };
-            let path = PathBuf::from(cwd);
+            let path = host.to_readable(cwd);
             if path.is_absolute() {
                 return Some(path);
             }
@@ -148,9 +160,9 @@ impl ClaudeProvider {
             self.live_session_entries()
                 .into_par_iter()
                 .filter_map(|(path, slug)| {
-                    let root = Self::read_session_cwd(&path)
+                    let root = Self::read_session_cwd(&path, &self.host)
                         .filter(|cwd| cwd.exists())
-                        .unwrap_or_else(|| PathBuf::from(decode_project_slug(&slug)));
+                        .unwrap_or_else(|| PathBuf::from(self.host.decode_project_slug(&slug)));
                     (!root.as_os_str().is_empty()).then_some(root)
                 })
                 .collect()
@@ -290,9 +302,9 @@ impl ClaudeProvider {
             source: self.id().to_string(),
             session_id,
             project: slug.to_string(),
-            project_path: Self::read_session_cwd(path)
+            project_path: Self::read_session_cwd(path, &self.host)
                 .map(|cwd| cwd.to_string_lossy().to_string())
-                .unwrap_or_else(|| decode_project_slug(slug)),
+                .unwrap_or_else(|| self.host.decode_project_slug(slug)),
             created_at,
             timestamp: updated_at.clone(),
             updated_at,
@@ -396,7 +408,7 @@ impl ClaudeProvider {
             source: self.id().to_string(),
             source_display_name: self.display_name().to_string(),
             project: project.to_string(),
-            project_path: decode_project_slug(project),
+            project_path: self.host.decode_project_slug(project),
             filename,
             frontmatter: fm,
             content: body,
@@ -673,7 +685,7 @@ impl AgentProvider for ClaudeProvider {
     }
 
     fn list_memory_projects(&self) -> Result<Vec<ProjectInfo>, AppError> {
-        claude_scanner::list_projects(&self.paths)
+        claude_scanner::list_projects(&self.paths, &self.host)
     }
 
     fn list_memories(&self, project: &str) -> Result<Vec<MemoryFile>, AppError> {
@@ -808,9 +820,9 @@ impl AgentProvider for ClaudeProvider {
             session_entries
                 .into_par_iter()
                 .filter_map(|(path, slug)| {
-                    let display_path = Self::read_session_cwd(&path)
+                    let display_path = Self::read_session_cwd(&path, &self.host)
                         .map(|cwd| cwd.to_string_lossy().to_string())
-                        .unwrap_or_else(|| decode_project_slug(&slug));
+                        .unwrap_or_else(|| self.host.decode_project_slug(&slug));
                     jsonl::read_claude_session_summary_fast(&path, &slug, &display_path)
                 })
                 .collect()

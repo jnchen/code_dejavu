@@ -27,6 +27,15 @@ pub struct DejavuConfig {
     pub agent_args: HashMap<String, Vec<String>>,
     #[serde(default = "default_prices")]
     pub prices: Vec<PriceRow>,
+    /// Whether to look for agent installs inside WSL distributions. On by default: a machine with
+    /// no WSL pays one cheap `wsl.exe --list` at startup, and a machine that runs its agents inside
+    /// WSL would otherwise show nothing at all.
+    #[serde(default = "default_wsl_scan")]
+    pub wsl_scan: bool,
+    /// Distributions to leave alone. Reading a distro's share starts it, so this is the escape
+    /// hatch for one that is slow, huge, or simply not interesting.
+    #[serde(default)]
+    pub wsl_excluded: Vec<String>,
     #[serde(default, rename = "claude_args", skip_serializing)]
     pub legacy_claude_args: Vec<String>,
 }
@@ -66,6 +75,10 @@ fn default_prices() -> Vec<PriceRow> {
         output,
     })
     .collect()
+}
+
+fn default_wsl_scan() -> bool {
+    true
 }
 
 fn default_shell() -> String {
@@ -137,6 +150,8 @@ impl Default for DejavuConfig {
             env: HashMap::new(),
             agent_args: HashMap::new(),
             prices: default_prices(),
+            wsl_scan: default_wsl_scan(),
+            wsl_excluded: Vec::new(),
             legacy_claude_args: Vec::new(),
         }
     }
@@ -203,7 +218,7 @@ fn app_config_dir() -> std::path::PathBuf {
     }
 }
 
-fn load_config() -> DejavuConfig {
+pub fn load_config() -> DejavuConfig {
     let path = config_path();
     if path.exists() {
         fs::read_to_string(&path)
@@ -371,11 +386,87 @@ fn applescript_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// The bash script run inside a distro for a project directory.
+///
+/// Separated from the spawn so it can be executed and asserted on directly — the interesting part
+/// is the quoting, and a launched terminal window proves nothing to a test.
+#[cfg(windows)]
+pub(crate) fn wsl_shell_script(
+    config: &DejavuConfig,
+    cwd: &str,
+    main_cmd: Option<String>,
+    keep_open: bool,
+) -> String {
+    let mut parts = vec![format!("cd {}", posix_quote(cwd))];
+    parts.extend(
+        config
+            .env
+            .iter()
+            .map(|(key, value)| format_env_set("bash", key, value))
+            .filter(|part| !part.is_empty()),
+    );
+    if let Some(cmd) = main_cmd.filter(|cmd| !cmd.is_empty()) {
+        parts.push(cmd);
+    }
+    let script = parts.join(" && ");
+    if keep_open {
+        // Keep the window open afterwards, the way the native branches do.
+        format!("{}; exec ${{SHELL:-bash}}", script)
+    } else {
+        script
+    }
+}
+
+/// Open a terminal *inside* the WSL distribution the project lives on.
+///
+/// The project path reaching us is the readable UNC form (`\\wsl.localhost\Ubuntu\home\me\app`);
+/// the shell on the other side only understands `/home/me/app`, so it is translated back. The
+/// configured shell is ignored here on purpose: whatever the user picked for Windows, the shell
+/// that can actually run the agent lives in the distro.
+///
+/// The command is introduced with `-e`, **not** `--`. Everything after `--` is re-split by
+/// `wsl.exe` on whitespace, which quietly shreds a quoted script: `cd 'a b' && export X=1` arrives
+/// as a handful of separate words and bash runs fragments of it. `-e` passes the argument vector
+/// through intact.
+#[cfg(windows)]
+fn launch_wsl_shell(
+    config: &DejavuConfig,
+    distro: &str,
+    project_path: &str,
+    main_cmd: Option<String>,
+) -> Result<(), AppError> {
+    let host = crate::hosts::Host::Wsl {
+        distro: distro.to_string(),
+        user: None,
+    };
+    let cwd = host.to_agent_path(std::path::Path::new(project_path));
+    let script = wsl_shell_script(config, &cwd, main_cmd, true);
+
+    // `start` reads a leading quoted argument as the window title, so give it an explicit empty
+    // one rather than letting it swallow part of the command.
+    Command::new("cmd")
+        .args([
+            "/c", "start", "", "wsl.exe", "-d", distro, "-e", "bash", "-lc",
+        ])
+        .arg(&script)
+        .spawn()
+        .map_err(|e| AppError::Archive(format!("无法打开 WSL 终端（{}）: {}", distro, e)))?;
+    Ok(())
+}
+
 fn launch_shell(
     config: &DejavuConfig,
     project_path: &str,
     main_cmd: Option<String>,
 ) -> Result<(), AppError> {
+    // A WSL project is identified by its own path, so nothing has to be threaded down here.
+    #[cfg(windows)]
+    if let crate::hosts::Host::Wsl { distro, .. } =
+        crate::hosts::Host::of_path(std::path::Path::new(project_path))
+    {
+        return launch_wsl_shell(config, &distro, project_path, main_cmd);
+    }
+
     let env_cmds: String = config
         .env
         .iter()

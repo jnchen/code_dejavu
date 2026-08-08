@@ -34,6 +34,24 @@
   let newEnvKey = $state("");
   let newEnvVal = $state("");
   let newArgs = $state<Record<string, string>>({});
+  let newExcludedDistro = $state("");
+
+  // Every non-native host any source reports, deduped — the WSL installs actually in use.
+  let connectedHosts = $derived([...new Set(sources.flatMap((source) => source.hosts ?? []))].sort());
+
+  function addExcludedDistro() {
+    const name = newExcludedDistro.trim();
+    if (!dejavuConfig || !name) return;
+    if (!dejavuConfig.wsl_excluded.some((existing) => existing.toLowerCase() === name.toLowerCase())) {
+      dejavuConfig.wsl_excluded = [...dejavuConfig.wsl_excluded, name];
+    }
+    newExcludedDistro = "";
+  }
+
+  function removeExcludedDistro(name: string) {
+    if (!dejavuConfig) return;
+    dejavuConfig.wsl_excluded = dejavuConfig.wsl_excluded.filter((existing) => existing !== name);
+  }
 
   // Usage price table — stored in the app config (DejavuConfig.prices), edited here.
   let pricesSaved = $state(false);
@@ -88,7 +106,13 @@
         api.instructions.list(),
       ]);
       const configs = artifactList.filter((artifact) => artifact.kind === "config" && artifact.scope !== "project");
-      dejavuConfig = { ...dc, agent_args: dc.agent_args ?? {}, prices: dc.prices ?? [] };
+      dejavuConfig = {
+        ...dc,
+        agent_args: dc.agent_args ?? {},
+        prices: dc.prices ?? [],
+        wsl_scan: dc.wsl_scan ?? true,
+        wsl_excluded: dc.wsl_excluded ?? [],
+      };
       sources = sourceList;
       configArtifacts = configs;
 
@@ -390,6 +414,54 @@
                 <option value="bash">Bash / Git Bash</option>
               </select>
             </div>
+          </div>
+
+          <div class="rounded-xl border border-border bg-bg-secondary p-4">
+            <h3 class="mb-3 text-sm font-medium">{t("set.wsl")}</h3>
+            <label class="flex items-start gap-2.5">
+              <input type="checkbox" bind:checked={dejavuConfig.wsl_scan} class="mt-0.5 accent-accent" />
+              <span>
+                <span class="block text-xs">{t("set.wslScan")}</span>
+                <span class="mt-1 block text-[10px] leading-relaxed text-text-muted">{t("set.wslScanHint")}</span>
+              </span>
+            </label>
+
+            {#if dejavuConfig.wsl_scan}
+              <div class="mt-3 border-t border-border-subtle pt-3">
+                <div class="mb-2 text-[10px] text-text-secondary">{t("set.wslConnected")}</div>
+                {#if connectedHosts.length > 0}
+                  <div class="flex flex-wrap gap-1.5">
+                    {#each connectedHosts as host}
+                      <span class="rounded-lg bg-accent-dim px-2.5 py-1 font-mono text-[11px] text-accent">{host}</span>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="text-[11px] text-text-muted">{t("set.wslNone")}</p>
+                {/if}
+              </div>
+
+              <div class="mt-3 border-t border-border-subtle pt-3">
+                <div class="mb-2 text-[10px] text-text-secondary">{t("set.wslExcluded")}</div>
+                {#if dejavuConfig.wsl_excluded.length > 0}
+                  <div class="mb-2 flex flex-wrap gap-1.5">
+                    {#each dejavuConfig.wsl_excluded as distro}
+                      <span class="flex items-center gap-1.5 rounded-lg bg-bg-tertiary px-2.5 py-1 font-mono text-[11px]">
+                        {distro}
+                        <button onclick={() => removeExcludedDistro(distro)} class="text-[10px] text-danger hover:text-danger-hover">x</button>
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
+                <div class="flex gap-1">
+                  <input
+                    bind:value={newExcludedDistro}
+                    placeholder={t("set.wslExcludePlaceholder")}
+                    class="w-48 rounded-lg border border-border bg-bg px-2 py-1 font-mono text-[10px] outline-none focus:border-accent"
+                  />
+                  <button onclick={addExcludedDistro} class="rounded-lg border border-border px-2 py-1 text-[10px] hover:bg-bg-hover">{t("common.add")}</button>
+                </div>
+              </div>
+            {/if}
           </div>
 
           <div class="rounded-xl border border-border bg-bg-secondary p-4">

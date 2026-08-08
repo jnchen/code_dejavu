@@ -24,6 +24,7 @@ use std::sync::{Arc, OnceLock};
 
 pub mod claude;
 pub mod codex;
+pub mod multi_host;
 pub mod opencode;
 
 /// Short metadata scans (session identity, project roots) serve page loads and must not queue
@@ -215,6 +216,10 @@ pub struct SourceInfo {
     /// Whether this agent's data root exists on disk (else the UI greys it out).
     pub available: bool,
     pub capabilities: Capabilities,
+    /// Non-native machines this source also reads (e.g. `["WSL:Ubuntu"]`). Empty on a plain
+    /// install; the UI uses it to offer a host choice where one is genuinely needed.
+    #[serde(default)]
+    pub hosts: Vec<String>,
 }
 
 /// Output of a provider's index scan: the documents plus how many sessions/files could not be read
@@ -269,6 +274,12 @@ pub trait AgentProvider: Send + Sync {
     fn capabilities(&self) -> Capabilities;
     /// True if this agent's data exists on disk.
     fn available(&self) -> bool;
+
+    /// Labels for the non-native machines this source also covers. Only a multi-host provider has
+    /// any, so the default is "just this machine".
+    fn hosts(&self) -> Vec<String> {
+        Vec::new()
+    }
 
     /// Filesystem roots whose changes should invalidate the search index (for auto-refresh).
     /// Session-backed providers point this at their session store(s); others may leave it empty.
@@ -561,6 +572,7 @@ impl ProviderRegistry {
                 display_name: p.display_name().to_string(),
                 available: p.available(),
                 capabilities: p.capabilities(),
+                hosts: p.hosts(),
             })
             .collect()
     }
@@ -568,13 +580,28 @@ impl ProviderRegistry {
 
 pub use claude::ClaudeProvider;
 pub use codex::CodexProvider;
+pub use multi_host::MultiHostProvider;
 pub use opencode::OpenCodeProvider;
 
-pub fn default_providers(claude_paths: ClaudePaths) -> Vec<Arc<dyn AgentProvider>> {
+/// One multi-host provider per agent. Each starts with only the native install registered; WSL
+/// homes are adopted later (see `hosts::discover_wsl_homes`), because probing a distro's share
+/// boots it and app launch must not wait on that.
+pub fn default_providers(claude_paths: ClaudePaths) -> Vec<Arc<MultiHostProvider>> {
     vec![
-        Arc::new(ClaudeProvider::new(claude_paths)),
-        Arc::new(CodexProvider::new()),
-        Arc::new(OpenCodeProvider::new()),
+        Arc::new(MultiHostProvider::new(
+            Arc::new(ClaudeProvider::new(claude_paths)),
+            Box::new(|host, home| {
+                Arc::new(ClaudeProvider::for_host(host, ClaudePaths::for_home(home)))
+            }),
+        )),
+        Arc::new(MultiHostProvider::new(
+            Arc::new(CodexProvider::new()),
+            Box::new(|host, home| Arc::new(CodexProvider::for_host(host, home))),
+        )),
+        Arc::new(MultiHostProvider::new(
+            Arc::new(OpenCodeProvider::new()),
+            Box::new(|host, home| Arc::new(OpenCodeProvider::for_host(host, home))),
+        )),
     ]
 }
 

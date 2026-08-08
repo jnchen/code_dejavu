@@ -11,6 +11,7 @@ use super::{
     InstructionCandidate, TokenUsage,
 };
 use crate::error::AppError;
+use crate::hosts::Host;
 use crate::models::profile::ProfileArchive;
 use crate::models::rule::RuleFile;
 use crate::models::session::{
@@ -95,6 +96,9 @@ pub struct OpenCodeProvider {
     config_dir: PathBuf,
     data_dir: PathBuf,
     archive_root: PathBuf,
+    /// The machine this install lives on. Session rows store the project directory as the agent
+    /// saw it, so a WSL install's directories need translating before they can be opened here.
+    host: Host,
 }
 
 struct OpenCodeMessageBatch {
@@ -110,12 +114,26 @@ impl Default for OpenCodeProvider {
 
 impl OpenCodeProvider {
     pub fn new() -> Self {
-        let home = home();
+        Self::for_host(Host::Native, &home())
+    }
+
+    /// An OpenCode install rooted at `home`, which may belong to another host (e.g. a WSL distro).
+    /// Snapshots stay in the app's own data directory, namespaced per host so two installs cannot
+    /// overwrite each other's archives.
+    pub fn for_host(host: Host, home: &Path) -> Self {
         let data_dir = home.join(".local").join("share").join("opencode");
+        let archive_root = match host.tag() {
+            Some(_) => app_data_dir()
+                .join("archives")
+                .join("opencode")
+                .join(format!("wsl-{}", host.key())),
+            None => app_data_dir().join("archives").join("opencode"),
+        };
         Self {
             db: data_dir.join("opencode.db"),
             config_dir: home.join(".config").join("opencode"),
-            archive_root: app_data_dir().join("archives").join("opencode"),
+            archive_root,
+            host,
             data_dir,
         }
     }
@@ -151,6 +169,7 @@ impl OpenCodeProvider {
 
     fn push_roots_from_query(
         conn: &Connection,
+        host: &Host,
         roots: &mut Vec<PathBuf>,
         seen: &mut std::collections::HashSet<String>,
         sql: &str,
@@ -166,7 +185,7 @@ impl OpenCodeProvider {
             if root.is_empty() || root == "global" {
                 continue;
             }
-            let path = PathBuf::from(root);
+            let path = host.to_readable(root);
             if !path.is_absolute() || !seen.insert(path.to_string_lossy().to_string()) {
                 continue;
             }
@@ -182,24 +201,28 @@ impl OpenCodeProvider {
         let mut seen = std::collections::HashSet::new();
         Self::push_roots_from_query(
             &conn,
+            &self.host,
             &mut roots,
             &mut seen,
             "SELECT directory FROM session WHERE directory IS NOT NULL AND directory <> ''",
         );
         Self::push_roots_from_query(
             &conn,
+            &self.host,
             &mut roots,
             &mut seen,
             "SELECT id FROM project WHERE id IS NOT NULL AND id <> ''",
         );
         Self::push_roots_from_query(
             &conn,
+            &self.host,
             &mut roots,
             &mut seen,
             "SELECT directory FROM project_directory WHERE directory IS NOT NULL AND directory <> ''",
         );
         Self::push_roots_from_query(
             &conn,
+            &self.host,
             &mut roots,
             &mut seen,
             "SELECT path FROM project_directory WHERE path IS NOT NULL AND path <> ''",
@@ -298,6 +321,7 @@ impl OpenCodeProvider {
 
     fn list_sessions_from_conn(
         conn: &Connection,
+        host: &Host,
         project: Option<&str>,
         archive_name: Option<String>,
     ) -> Result<Vec<SessionSummary>, AppError> {
@@ -358,7 +382,7 @@ impl OpenCodeProvider {
                 source: "opencode".to_string(),
                 session_id: id.clone(),
                 project: dir.clone(),
-                project_path: dir,
+                project_path: host.to_readable(&dir).to_string_lossy().to_string(),
                 first_prompt: None,
                 agent_title: title
                     .map(|v| v.trim().to_string())
@@ -481,7 +505,9 @@ impl OpenCodeProvider {
             }
         }
         let mut docs = Vec::new();
-        for s in Self::list_sessions_from_conn(conn, None, archive_name).unwrap_or_default() {
+        for s in
+            Self::list_sessions_from_conn(conn, &self.host, None, archive_name).unwrap_or_default()
+        {
             // Keep content-less sessions in the index too (matches Claude + the old disk-scan
             // browse), so an empty session still appears and can be resumed.
             let texts = by_top
@@ -709,7 +735,7 @@ impl AgentProvider for OpenCodeProvider {
             Err(AppError::NotFound(_)) => return Ok(Vec::new()),
             Err(error) => return Err(error),
         };
-        Self::list_sessions_from_conn(&conn, project, None)
+        Self::list_sessions_from_conn(&conn, &self.host, project, None)
     }
 
     fn index_documents(&self) -> IndexBatch {
@@ -1530,6 +1556,7 @@ mod tests {
             config_dir: PathBuf::new(),
             data_dir: PathBuf::new(),
             archive_root: PathBuf::new(),
+            host: Host::Native,
         };
 
         let newest = provider

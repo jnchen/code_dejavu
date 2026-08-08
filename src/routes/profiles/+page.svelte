@@ -4,6 +4,7 @@
   import ConfirmDialog from "$lib/ConfirmDialog.svelte";
   import { t } from "$lib/i18n.svelte";
   import { deferRouteLoad } from "$lib/defer";
+  import { hostOfKey, withHostTag, withoutHostTag } from "$lib/hosts";
   import type { ProfileArchive, SourceInfo } from "$lib/types";
 
   let sources = $state<SourceInfo[]>([]);
@@ -13,6 +14,8 @@
   let error = $state("");
   let showCreate = $state(false);
   let createName = $state("");
+  /** Which machine the next snapshot is taken from; null means this one. */
+  let createTarget = $state<string | null>(null);
   let confirmRestore = $state<string | null>(null);
   let confirmDelete = $state<string | null>(null);
   let busy = $state(false);
@@ -37,9 +40,11 @@
     if (!selectedSource || !canWriteArchive(selectedSource)) return;
     busy = true;
     try {
-      await api.profiles.create(createName || undefined, selectedSource);
+      // The host travels with the label: an untagged label snapshots the local install.
+      await api.profiles.create(withHostTag(createName, createTarget) || undefined, selectedSource);
       showCreate = false;
       createName = "";
+      createTarget = null;
       await refresh();
     } catch (e) {
       error = String(e);
@@ -95,6 +100,11 @@
   }
 
   let archiveSources = $derived(sources.filter((source) => source.capabilities.archive_read));
+  /** Snapshot targets for the selected source: this machine, plus any WSL install behind it. */
+  let createTargets = $derived([
+    null,
+    ...(sources.find((source) => source.id === selectedSource)?.hosts ?? []),
+  ]);
   let restoreTarget = $derived(profiles.find((profile) => profile.name === confirmRestore) ?? null);
   let deleteTarget = $derived(profiles.find((profile) => profile.name === confirmDelete) ?? null);
 
@@ -144,6 +154,22 @@
   {#if showCreate}
     <div class="mb-6 bg-bg-secondary border border-border rounded-xl p-5">
       <h3 class="text-sm font-medium mb-3">{t("profiles.newTitle")}</h3>
+      {#if createTargets.length > 1}
+        <div class="mb-3 flex items-center gap-2">
+          <span class="text-[10px] text-text-secondary">{t("prof.target")}</span>
+          <div class="inline-flex overflow-hidden rounded-lg border border-border">
+            {#each createTargets as target}
+              <button
+                onclick={() => (createTarget = target)}
+                class="px-2.5 py-1 text-[10px] transition-colors
+                  {createTarget === target ? 'bg-accent text-white' : 'text-text-secondary hover:bg-bg-hover'}"
+              >
+                {target ?? t("prof.targetNative")}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
       <div class="flex gap-3">
         <input
           bind:value={createName}
@@ -178,7 +204,10 @@
           hover:border-border-hover transition-colors">
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
-              <span class="text-sm font-medium truncate">{p.name}</span>
+              <span class="text-sm font-medium truncate">{withoutHostTag(p.name)}</span>
+              {#if hostOfKey(p.name)}
+                <span class="rounded-full bg-bg-tertiary px-1.5 py-0.5 text-[10px] text-text-muted">{hostOfKey(p.name)}</span>
+              {/if}
               {#if p.is_auto}
                 <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-bg-tertiary text-text-muted">{t("profiles.auto")}</span>
               {/if}

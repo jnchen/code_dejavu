@@ -73,6 +73,8 @@ export interface SourceInfo {
   display_name: string;
   available: boolean;
   capabilities: Capabilities;
+  /** Non-native machines this source also reads, e.g. ["WSL:Ubuntu"]. Empty on a plain install. */
+  hosts?: string[];
 }
 
 export interface SessionModelInfo {
@@ -334,6 +336,10 @@ export interface DejavuConfig {
   env: Record<string, string>;
   agent_args: Record<string, string[]>;
   prices: PriceRow[];
+  /** Look for agent installs inside WSL distributions. */
+  wsl_scan: boolean;
+  /** Distributions to skip; reading a distro's share starts it. */
+  wsl_excluded: string[];
 }
 
 export interface InstructionArtifact {

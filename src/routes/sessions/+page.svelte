@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
   import { api } from "$lib/api";
+  import { hostLabel, displayPath } from "$lib/hosts";
   import Timeline from "$lib/Timeline.svelte";
   import Markdown from "$lib/Markdown.svelte";
   import { highlightPlain } from "$lib/html";
@@ -1591,7 +1592,12 @@ ${rows}
             >i</span>
           {/if}
         </div>
-        <div class="text-[10px] text-text-secondary mt-1 truncate">{detail.session.project_path}</div>
+        <div class="text-[10px] text-text-secondary mt-1 truncate" title={detail.session.project_path}>
+          {#if hostLabel(detail.session)}
+            <span class="mr-1.5 rounded bg-bg-tertiary px-1.5 py-0.5 text-[9px] text-text-muted">{hostLabel(detail.session)}</span>
+          {/if}
+          {displayPath(detail.session.project_path)}
+        </div>
         <div class="text-xs text-text-secondary mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
           <button
             onclick={() => copySessionId(detail!.session)}
@@ -2021,7 +2027,10 @@ ${rows}
               {#if s.archive_name}
                 <span class="px-1.5 py-0.5 bg-warning-dim text-warning rounded text-[9px]">{t("sess.archivedLabel", { name: s.archive_name })}</span>
               {/if}
-              <span>{s.project_path}</span>
+              {#if hostLabel(s)}
+                <span class="px-1.5 py-0.5 bg-bg-tertiary text-text-muted rounded text-[9px]" title={s.project_path}>{hostLabel(s)}</span>
+              {/if}
+              <span>{displayPath(s.project_path)}</span>
               <span class="w-1 h-1 rounded-full bg-border"></span>
               <span class="font-mono" title={s.session_id}>ID {shortSessionId(s)}</span>
               <span class="w-1 h-1 rounded-full bg-border"></span>

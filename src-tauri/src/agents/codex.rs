@@ -12,6 +12,7 @@ use super::{
     IndexBatch, IndexDoc, IndexManifestEntry, InstructionCandidate, LineParser, TokenUsage,
 };
 use crate::error::AppError;
+use crate::hosts::Host;
 use crate::models::memory::{MemoryFile, MemoryFrontmatter, ProjectInfo};
 use crate::models::profile::ProfileArchive;
 use crate::models::rule::RuleFile;
@@ -213,6 +214,9 @@ pub struct CodexProvider {
     sessions_dir: PathBuf,
     memories_db: PathBuf,
     archive_root: PathBuf,
+    /// The machine this install lives on. Rollouts record `cwd` as the agent saw it, so a WSL
+    /// install's project paths need translating before anything here can open them.
+    host: Host,
     project_inventory_cache: Mutex<Option<CodexProjectInventory>>,
 }
 
@@ -231,11 +235,26 @@ impl Default for CodexProvider {
 
 impl CodexProvider {
     pub fn new() -> Self {
-        let codex_dir = home().join(".codex");
+        Self::for_host(Host::Native, &home())
+    }
+
+    /// A Codex install rooted at `home`, which may belong to another host (e.g. a WSL distro).
+    /// Snapshots stay in the app's own data directory, namespaced per host so two installs cannot
+    /// overwrite each other's archives.
+    pub fn for_host(host: Host, home: &Path) -> Self {
+        let codex_dir = home.join(".codex");
+        let archive_root = match host.tag() {
+            Some(_) => app_data_dir()
+                .join("archives")
+                .join("codex")
+                .join(format!("wsl-{}", host.key())),
+            None => app_data_dir().join("archives").join("codex"),
+        };
         Self {
             sessions_dir: codex_dir.join("sessions"),
             memories_db: codex_dir.join("memories_1.sqlite"),
-            archive_root: app_data_dir().join("archives").join("codex"),
+            archive_root,
+            host,
             project_inventory_cache: Mutex::new(None),
             codex_dir,
         }
@@ -917,7 +936,7 @@ impl CodexProvider {
             .into_iter()
             .filter_map(|group| {
                 let cwd = group.root.meta.cwd.trim();
-                (!cwd.is_empty()).then(|| PathBuf::from(cwd))
+                (!cwd.is_empty()).then(|| self.host.to_readable(cwd))
             })
             .collect();
         roots.sort();
@@ -1082,7 +1101,11 @@ impl CodexProvider {
                 source: "codex".to_string(),
                 session_id: meta.thread_id,
                 project: meta.cwd.clone(),
-                project_path: meta.cwd,
+                project_path: self
+                    .host
+                    .to_readable(&meta.cwd)
+                    .to_string_lossy()
+                    .to_string(),
                 created_at: meta.started.clone(),
                 updated_at: updated_at.clone().or_else(|| meta.started.clone()),
                 agent_title: None,
@@ -1248,7 +1271,11 @@ impl AgentProvider for CodexProvider {
                 source: "codex".to_string(),
                 session_id: meta.thread_id.clone(),
                 project: meta.cwd.clone(),
-                project_path: meta.cwd.clone(),
+                project_path: self
+                    .host
+                    .to_readable(&meta.cwd)
+                    .to_string_lossy()
+                    .to_string(),
                 first_prompt: None,
                 agent_title: info
                     .and_then(|value| value.title.clone())
@@ -2216,6 +2243,7 @@ mod tests {
                 sessions_dir: self.path.clone(),
                 memories_db: self.path.join("missing-memories.sqlite"),
                 archive_root: self.path.join("missing-archives"),
+                host: Host::Native,
                 project_inventory_cache: Mutex::new(None),
             }
         }

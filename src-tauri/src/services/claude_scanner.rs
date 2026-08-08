@@ -1,6 +1,7 @@
 use crate::error::AppError;
+use crate::hosts::Host;
 use crate::models::memory::ProjectInfo;
-use crate::paths::{decode_project_slug, ClaudePaths};
+use crate::paths::ClaudePaths;
 use rayon::prelude::*;
 use std::fs;
 
@@ -30,7 +31,7 @@ fn count_files_with_ext(path: &std::path::Path, ext: &str) -> u32 {
         .count() as u32
 }
 
-pub fn list_projects(paths: &ClaudePaths) -> Result<Vec<ProjectInfo>, AppError> {
+pub fn list_projects(paths: &ClaudePaths, host: &Host) -> Result<Vec<ProjectInfo>, AppError> {
     let mut projects = Vec::new();
     if !paths.projects_dir.exists() {
         return Ok(projects);
@@ -60,7 +61,7 @@ pub fn list_projects(paths: &ClaudePaths) -> Result<Vec<ProjectInfo>, AppError> 
             ProjectInfo {
                 source: "claude".to_string(),
                 source_display_name: "Claude Code".to_string(),
-                display_path: decode_project_slug(&slug),
+                display_path: host.decode_project_slug(&slug),
                 slug,
                 memory_count,
                 session_count,
