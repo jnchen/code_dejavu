@@ -55,7 +55,13 @@ pub struct ClaudePaths {
 
 impl ClaudePaths {
     pub fn new() -> Self {
-        let home = Self::home_dir();
+        Self::for_home(&Self::home_dir())
+    }
+
+    /// The same layout rooted at an arbitrary home directory. Lets tests work against a temp home,
+    /// and lets a Claude install that lives in another home (e.g. inside a WSL distro) be addressed
+    /// without the process's own `$HOME` being involved.
+    pub fn for_home(home: &std::path::Path) -> Self {
         let claude_dir = home.join(".claude");
 
         Self {

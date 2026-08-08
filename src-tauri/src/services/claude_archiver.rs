@@ -2,6 +2,7 @@ use crate::error::AppError;
 use crate::models::profile::{ArchiveMeta, ProfileArchive};
 use crate::paths::ClaudePaths;
 use crate::services::claude_scanner::format_size;
+use crate::services::fsops;
 use chrono::Local;
 use std::fs;
 use std::path::Path;
@@ -43,80 +44,6 @@ const EPHEMERAL_ITEMS: &[&str] = &[
     "stats-cache.json",
     "statusline_debug.json",
 ];
-
-fn dir_size_recursive(path: &Path) -> u64 {
-    if !path.exists() {
-        return 0;
-    }
-    if path.is_file() {
-        return fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    }
-    walkdir::WalkDir::new(path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
-        .sum()
-}
-
-fn remove_path(path: &Path) {
-    if path.is_dir() {
-        let _ = fs::remove_dir_all(path);
-    } else if path.is_file() {
-        let _ = fs::remove_file(path);
-    }
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), AppError> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)?.flatten() {
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
-}
-
-fn copy_item(src: &Path, dst: &Path) -> Result<(), AppError> {
-    if src.is_dir() {
-        copy_dir_recursive(src, dst)?;
-    } else {
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(src, dst)?;
-    }
-    Ok(())
-}
-
-fn verify_copy(src: &Path, dst: &Path) -> bool {
-    if !dst.exists() {
-        return false;
-    }
-    if src.is_file() && dst.is_file() {
-        let src_len = fs::metadata(src).map(|m| m.len()).unwrap_or(0);
-        let dst_len = fs::metadata(dst).map(|m| m.len()).unwrap_or(0);
-        return src_len == dst_len;
-    }
-    if src.is_dir() && dst.is_dir() {
-        let src_count = walkdir::WalkDir::new(src)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .count();
-        let dst_count = walkdir::WalkDir::new(dst)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .count();
-        return src_count == dst_count;
-    }
-    false
-}
 
 pub fn list_profiles(paths: &ClaudePaths) -> Result<Vec<ProfileArchive>, AppError> {
     let mut profiles = Vec::new();
@@ -161,6 +88,55 @@ pub fn list_profiles(paths: &ClaudePaths) -> Result<Vec<ProfileArchive>, AppErro
     Ok(profiles)
 }
 
+/// Put items already moved into `archive_path` back where they came from. Used when a later item
+/// fails: the archive is incomplete, and because archiving *moves*, the live directory is the only
+/// other place that data can be — so it has to be restored before the archive is discarded.
+fn rollback_moved(claude_dir: &Path, archive_path: &Path, moved: &[&str]) {
+    for item in moved {
+        let from = archive_path.join(item);
+        let to = claude_dir.join(item);
+        if !from.exists() || to.exists() {
+            continue;
+        }
+        if fs::rename(&from, &to).is_err() {
+            let _ = fsops::copy_tree(&from, &to, &[]);
+        }
+    }
+}
+
+/// Move every user-data item into `archive_path`, leaving the live directory empty of them.
+/// Returns the archived items and their total size, or restores everything and fails.
+fn move_items_into(
+    claude_dir: &Path,
+    archive_path: &Path,
+) -> Result<(Vec<&'static str>, u64), AppError> {
+    let mut moved: Vec<&'static str> = Vec::new();
+    let mut total_size = 0u64;
+
+    for item in USER_DATA_ITEMS {
+        let src = claude_dir.join(item);
+        if !src.exists() {
+            continue;
+        }
+        match fsops::move_tree(&src, &archive_path.join(item), &[]) {
+            Ok(transfer) => {
+                total_size += transfer.bytes;
+                moved.push(item);
+            }
+            Err(err) => {
+                rollback_moved(claude_dir, archive_path, &moved);
+                let _ = fsops::remove_tree(archive_path);
+                return Err(AppError::Archive(format!(
+                    "归档 {} 失败: {}，已回滚",
+                    item, err
+                )));
+            }
+        }
+    }
+
+    Ok((moved, total_size))
+}
+
 pub fn create_profile(
     paths: &ClaudePaths,
     label: Option<String>,
@@ -180,59 +156,38 @@ pub fn create_profile(
         None => timestamp,
     };
     let archive_path = paths.archive_root.join(&archive_name);
+    if archive_path.exists() {
+        return Err(AppError::Archive(format!("归档已存在: {}", archive_name)));
+    }
     fs::create_dir_all(&archive_path)?;
 
-    // Phase 1: 复制所有数据到归档目录
-    let mut copied_items = Vec::new();
-    let mut total_size = 0u64;
+    // Archiving relocates the data rather than duplicating it: the live items are meant to end up
+    // gone either way, and a same-volume rename is both instant and atomic, so there is no window
+    // where a half-copied archive can be mistaken for a complete one.
+    let (archived_items, total_size) = move_items_into(&paths.claude_dir, &archive_path)?;
 
-    for item in USER_DATA_ITEMS {
-        let src = paths.claude_dir.join(item);
-        if src.exists() {
-            let size = dir_size_recursive(&src);
-            total_size += size;
-            let dst = archive_path.join(item);
-            copy_item(&src, &dst).map_err(|e| {
-                // 复制失败，清理已复制的部分归档
-                let _ = fs::remove_dir_all(&archive_path);
-                AppError::Archive(format!("复制 {} 失败: {}，归档已回滚", item, e))
-            })?;
-            // 验证复制完整性
-            if !verify_copy(&src, &dst) {
-                let _ = fs::remove_dir_all(&archive_path);
-                return Err(AppError::Archive(format!(
-                    "复制 {} 后验证失败（文件数或大小不匹配），归档已回滚",
-                    item
-                )));
-            }
-            copied_items.push(item);
-        }
-    }
-
-    // Phase 2: 写 meta（在删除原文件之前，确保归档完整）
     let meta = ArchiveMeta {
         created: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         name: archive_name.clone(),
-        items: copied_items.len() as u32,
+        items: archived_items.len() as u32,
         total_size,
         size_human: format_size(total_size),
         note: None,
     };
-    fs::write(
+    if let Err(err) = fs::write(
         archive_path.join("_meta.json"),
         serde_json::to_string_pretty(&meta)?,
-    )?;
-
-    // Phase 3: 归档验证通过后，才删除原文件
-    for item in &copied_items {
-        let src = paths.claude_dir.join(item);
-        remove_path(&src);
+    ) {
+        rollback_moved(&paths.claude_dir, &archive_path, &archived_items);
+        let _ = fsops::remove_tree(&archive_path);
+        return Err(AppError::Archive(format!(
+            "写入归档元数据失败: {}，已回滚",
+            err
+        )));
     }
 
-    // Phase 4: 清理临时缓存
     for item in EPHEMERAL_ITEMS {
-        let p = paths.claude_dir.join(item);
-        remove_path(&p);
+        let _ = fsops::remove_tree(&paths.claude_dir.join(item));
     }
 
     Ok(ProfileArchive {
@@ -240,7 +195,7 @@ pub fn create_profile(
         source_display_name: "Claude Code".to_string(),
         name: archive_name,
         created: meta.created,
-        items: copied_items.len() as u32,
+        items: meta.items,
         total_size,
         size_human: meta.size_human,
         note: None,
@@ -254,7 +209,7 @@ pub fn restore_profile(paths: &ClaudePaths, name: &str) -> Result<(), AppError> 
         return Err(AppError::NotFound(format!("归档不存在: {}", name)));
     }
 
-    // Phase 1: 如果当前有数据，先归档保护
+    // Phase 1: park whatever is live in an auto-backup archive before overwriting it.
     let has_existing = USER_DATA_ITEMS
         .iter()
         .any(|item| paths.claude_dir.join(item).exists());
@@ -263,29 +218,13 @@ pub fn restore_profile(paths: &ClaudePaths, name: &str) -> Result<(), AppError> 
         let backup_path = paths.archive_root.join(&backup_name);
         fs::create_dir_all(&backup_path)?;
 
-        let mut backup_count = 0u32;
-        let mut backup_size = 0u64;
-
-        for item in USER_DATA_ITEMS {
-            let src = paths.claude_dir.join(item);
-            if src.exists() {
-                let size = dir_size_recursive(&src);
-                backup_size += size;
-                let dst = backup_path.join(item);
-                copy_item(&src, &dst).map_err(|e| {
-                    AppError::Archive(format!(
-                        "自动备份 {} 失败: {}，恢复操作已中止（原数据未动）",
-                        item, e
-                    ))
-                })?;
-                backup_count += 1;
-            }
-        }
+        let (backed_up, backup_size) = move_items_into(&paths.claude_dir, &backup_path)
+            .map_err(|err| AppError::Archive(format!("{}，恢复操作已中止", err)))?;
 
         let backup_meta = ArchiveMeta {
             created: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             name: backup_name,
-            items: backup_count,
+            items: backed_up.len() as u32,
             total_size: backup_size,
             size_human: format_size(backup_size),
             note: Some(format!("恢复 {} 前的自动备份", name)),
@@ -294,28 +233,20 @@ pub fn restore_profile(paths: &ClaudePaths, name: &str) -> Result<(), AppError> 
             backup_path.join("_meta.json"),
             serde_json::to_string_pretty(&backup_meta)?,
         )?;
-
-        // 备份成功后才删除当前数据
-        for item in USER_DATA_ITEMS {
-            let src = paths.claude_dir.join(item);
-            remove_path(&src);
-        }
     }
 
     // Phase 2: 清理临时缓存
     for item in EPHEMERAL_ITEMS {
-        remove_path(&paths.claude_dir.join(item));
+        let _ = fsops::remove_tree(&paths.claude_dir.join(item));
     }
 
-    // Phase 3: 从归档复制回来（不动归档本身）
+    // Phase 3: copy — never move — out of the archive, so the archive stays intact afterwards.
     for entry in fs::read_dir(&archive_path)?.flatten() {
         let filename = entry.file_name().to_string_lossy().to_string();
         if filename == "_meta.json" {
             continue;
         }
-        let dst = paths.claude_dir.join(&filename);
-        let src = entry.path();
-        copy_item(&src, &dst)?;
+        fsops::copy_tree(&entry.path(), &paths.claude_dir.join(&filename), &[])?;
     }
 
     Ok(())
@@ -326,8 +257,7 @@ pub fn delete_profile(paths: &ClaudePaths, name: &str) -> Result<(), AppError> {
     if !archive_path.exists() {
         return Err(AppError::NotFound(format!("归档不存在: {}", name)));
     }
-    fs::remove_dir_all(&archive_path)?;
-    Ok(())
+    fsops::remove_tree(&archive_path)
 }
 
 pub fn rename_profile(paths: &ClaudePaths, old: &str, new: &str) -> Result<(), AppError> {
@@ -349,4 +279,116 @@ pub fn rename_profile(paths: &ClaudePaths, old: &str, new: &str) -> Result<(), A
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempHome {
+        path: PathBuf,
+    }
+
+    impl TempHome {
+        fn new(name: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "dejavu-claude-archiver-{}-{}-{}",
+                name,
+                std::process::id(),
+                nonce
+            ));
+            fs::create_dir_all(&path).expect("temp home");
+            Self { path }
+        }
+
+        fn paths(&self) -> ClaudePaths {
+            ClaudePaths::for_home(&self.path)
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn write(path: &Path, body: &str) {
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(path, body).expect("write");
+    }
+
+    fn seed(paths: &ClaudePaths) {
+        write(&paths.claude_md, "# global");
+        write(
+            &paths.projects_dir.join("C--demo").join("a.jsonl"),
+            "{\"x\":1}",
+        );
+        write(&paths.claude_dir.join("cache").join("junk.bin"), "junk");
+    }
+
+    #[test]
+    fn create_moves_user_data_into_the_archive_and_clears_the_live_dir() {
+        let home = TempHome::new("create");
+        let paths = home.paths();
+        seed(&paths);
+
+        let archive = create_profile(&paths, Some("demo".to_string())).expect("create");
+        let archived = paths.archive_root.join(&archive.name);
+
+        assert_eq!(archive.items, 2);
+        assert_eq!(archive.total_size, 8 + 7);
+        assert_eq!(
+            fs::read_to_string(archived.join("projects").join("C--demo").join("a.jsonl"))
+                .expect("archived session"),
+            "{\"x\":1}"
+        );
+        assert!(!paths.projects_dir.exists());
+        assert!(!paths.claude_md.exists());
+        // Ephemeral caches are dropped, not archived.
+        assert!(!paths.claude_dir.join("cache").exists());
+        assert!(!archived.join("cache").exists());
+    }
+
+    #[test]
+    fn restore_auto_backs_up_current_data_and_keeps_the_source_archive_intact() {
+        let home = TempHome::new("restore");
+        let paths = home.paths();
+        seed(&paths);
+        let archive = create_profile(&paths, None).expect("create");
+
+        write(&paths.claude_md, "# replaced");
+        restore_profile(&paths, &archive.name).expect("restore");
+
+        assert_eq!(
+            fs::read_to_string(&paths.claude_md).expect("restored"),
+            "# global"
+        );
+        assert!(paths.projects_dir.join("C--demo").join("a.jsonl").exists());
+        // The restored-from archive must survive the restore untouched.
+        assert!(paths
+            .archive_root
+            .join(&archive.name)
+            .join("projects")
+            .join("C--demo")
+            .join("a.jsonl")
+            .exists());
+        // ...and the pre-restore state is recoverable from the auto backup.
+        let autos: Vec<_> = list_profiles(&paths)
+            .expect("list")
+            .into_iter()
+            .filter(|profile| profile.is_auto)
+            .collect();
+        assert_eq!(autos.len(), 1);
+        assert_eq!(
+            fs::read_to_string(paths.archive_root.join(&autos[0].name).join("CLAUDE.md"))
+                .expect("backed up"),
+            "# replaced"
+        );
+    }
 }

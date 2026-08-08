@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::models::profile::{ArchiveMeta, ProfileArchive};
+use crate::services::fsops::{self, Transfer};
 use chrono::Local;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,185 +35,9 @@ fn preserve_paths(item: &SnapshotItem) -> Vec<PathBuf> {
     item.preserve.iter().map(PathBuf::from).collect()
 }
 
-fn should_preserve(rel: &Path, preserve: &[PathBuf]) -> bool {
-    preserve
-        .iter()
-        .any(|preserved| rel == preserved || rel.starts_with(preserved))
-}
-
-fn has_preserved_descendant(rel: &Path, preserve: &[PathBuf]) -> bool {
-    preserve
-        .iter()
-        .any(|preserved| preserved.starts_with(rel) && preserved != rel)
-}
-
-fn dir_size_recursive(path: &Path, preserve: &[PathBuf], rel: &Path) -> u64 {
-    if !path.exists() {
-        return 0;
-    }
-    if should_preserve(rel, preserve) {
-        return 0;
-    }
-    if path.is_file() {
-        return fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    }
-    fs::read_dir(path)
-        .map(|entries| {
-            entries
-                .filter_map(|entry| entry.ok())
-                .map(|entry| {
-                    let child_rel = rel.join(entry.file_name());
-                    dir_size_recursive(&entry.path(), preserve, &child_rel)
-                })
-                .sum()
-        })
-        .unwrap_or(0)
-}
-
-fn file_count_recursive(path: &Path, preserve: &[PathBuf], rel: &Path) -> usize {
-    if !path.exists() || should_preserve(rel, preserve) {
-        return 0;
-    }
-    if path.is_file() {
-        return 1;
-    }
-    fs::read_dir(path)
-        .map(|entries| {
-            entries
-                .filter_map(|entry| entry.ok())
-                .map(|entry| {
-                    let child_rel = rel.join(entry.file_name());
-                    file_count_recursive(&entry.path(), preserve, &child_rel)
-                })
-                .sum()
-        })
-        .unwrap_or(0)
-}
-
-fn has_archivable_data(path: &Path, preserve: &[PathBuf], rel: &Path) -> bool {
-    if !path.exists() || should_preserve(rel, preserve) {
-        return false;
-    }
-    if path.is_file() {
-        return true;
-    }
-    fs::read_dir(path)
-        .map(|entries| {
-            entries.filter_map(|entry| entry.ok()).any(|entry| {
-                let child_rel = rel.join(entry.file_name());
-                has_archivable_data(&entry.path(), preserve, &child_rel)
-            })
-        })
-        .unwrap_or(false)
-}
-
-fn remove_path(path: &Path) -> Result<(), AppError> {
-    if path.is_dir() {
-        fs::remove_dir_all(path)?;
-    } else if path.is_file() {
-        fs::remove_file(path)?;
-    }
-    Ok(())
-}
-
-fn copy_dir_recursive(
-    src: &Path,
-    dst: &Path,
-    preserve: &[PathBuf],
-    rel: &Path,
-) -> Result<(), AppError> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)?.flatten() {
-        let src_path = entry.path();
-        let child_rel = rel.join(entry.file_name());
-        if should_preserve(&child_rel, preserve) {
-            continue;
-        }
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path, preserve, &child_rel)?;
-        } else {
-            if let Some(parent) = dst_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
-}
-
-fn copy_item_with_preserve(src: &Path, dst: &Path, preserve: &[PathBuf]) -> Result<(), AppError> {
-    if src.is_dir() {
-        copy_dir_recursive(src, dst, preserve, Path::new(""))
-    } else {
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(src, dst)?;
-        Ok(())
-    }
-}
-
-fn verify_copy(src: &Path, dst: &Path, preserve: &[PathBuf]) -> bool {
-    if !dst.exists() {
-        return false;
-    }
-    if src.is_file() && dst.is_file() {
-        let src_len = fs::metadata(src).map(|m| m.len()).unwrap_or(0);
-        let dst_len = fs::metadata(dst).map(|m| m.len()).unwrap_or(0);
-        return src_len == dst_len;
-    }
-    if src.is_dir() && dst.is_dir() {
-        let src_count = file_count_recursive(src, preserve, Path::new(""));
-        let dst_count = file_count_recursive(dst, &[], Path::new(""));
-        let src_size = dir_size_recursive(src, preserve, Path::new(""));
-        let dst_size = dir_size_recursive(dst, &[], Path::new(""));
-        return src_count == dst_count && src_size == dst_size;
-    }
-    false
-}
-
-fn remove_children_except(root: &Path, preserve: &[PathBuf], rel: &Path) -> Result<(), AppError> {
-    if !root.exists() {
-        return Ok(());
-    }
-    if root.is_file() {
-        if !should_preserve(rel, preserve) {
-            remove_path(root)?;
-        }
-        return Ok(());
-    }
-
-    for entry in fs::read_dir(root)?.flatten() {
-        let child_path = entry.path();
-        let child_rel = rel.join(entry.file_name());
-        if should_preserve(&child_rel, preserve) {
-            continue;
-        }
-        if child_path.is_dir() && has_preserved_descendant(&child_rel, preserve) {
-            remove_children_except(&child_path, preserve, &child_rel)?;
-            if fs::read_dir(&child_path)
-                .map(|mut entries| entries.next().is_none())
-                .unwrap_or(false)
-            {
-                fs::remove_dir(&child_path)?;
-            }
-        } else {
-            remove_path(&child_path)?;
-        }
-    }
-
-    Ok(())
-}
-
 fn clear_current_items(spec: &SnapshotSpec) -> Result<(), AppError> {
     for item in &spec.items {
-        let preserve = preserve_paths(item);
-        if preserve.is_empty() {
-            remove_path(&item.path)?;
-        } else {
-            remove_children_except(&item.path, &preserve, Path::new(""))?;
-        }
+        fsops::remove_tree_except(&item.path, &preserve_paths(item))?;
     }
     Ok(())
 }
@@ -224,10 +49,7 @@ fn archive_path(spec: &SnapshotSpec, name: &str) -> PathBuf {
 fn existing_items(spec: &SnapshotSpec) -> Vec<SnapshotItem> {
     spec.items
         .iter()
-        .filter(|item| {
-            let preserve = preserve_paths(item);
-            has_archivable_data(&item.path, &preserve, Path::new(""))
-        })
+        .filter(|item| fsops::has_data(&item.path, &preserve_paths(item)))
         .cloned()
         .collect()
 }
@@ -277,10 +99,49 @@ pub fn list_profiles(spec: &SnapshotSpec) -> Result<Vec<ProfileArchive>, AppErro
     Ok(profiles)
 }
 
+/// Put already-archived items back in the live directory. Only meaningful for a taking snapshot:
+/// the data was moved, so an aborted archive would otherwise strand it in a directory we are about
+/// to delete.
+fn rollback_taken(archive: &Path, taken: &[SnapshotItem]) {
+    for item in taken {
+        let from = archive.join(item.name);
+        if !from.exists() {
+            continue;
+        }
+        if let Some(parent) = item.path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if !item.path.exists() && fs::rename(&from, &item.path).is_ok() {
+            continue;
+        }
+        let _ = fsops::copy_tree(&from, &item.path, &[]);
+    }
+}
+
+/// Transfer one item into the archive. `take` moves (the live copy is meant to go away anyway, and
+/// a same-volume rename makes that instant); otherwise it copies and checks the result against a
+/// stat of the source, which is the same completeness guarantee the old double-walk gave.
+fn archive_item(item: &SnapshotItem, dst: &Path, take: bool) -> Result<Transfer, AppError> {
+    let preserve = preserve_paths(item);
+    if take {
+        return fsops::move_tree(&item.path, dst, &preserve);
+    }
+    let expected = fsops::dir_stats(&item.path, &preserve);
+    let copied = fsops::copy_tree(&item.path, dst, &preserve)?;
+    if copied != expected {
+        return Err(AppError::Archive(format!(
+            "copy verification failed for {} (source {} files/{} bytes, archive {} files/{} bytes)",
+            item.name, expected.files, expected.bytes, copied.files, copied.bytes
+        )));
+    }
+    Ok(copied)
+}
+
 fn write_archive(
     spec: &SnapshotSpec,
     archive_name: String,
     note: Option<String>,
+    take: bool,
 ) -> Result<ProfileArchive, AppError> {
     let items = existing_items(spec);
     if items.is_empty() {
@@ -300,38 +161,47 @@ fn write_archive(
     fs::create_dir_all(&path)?;
 
     let mut total_size = 0u64;
-    let mut copied = Vec::new();
+    let mut archived: Vec<SnapshotItem> = Vec::new();
     for item in &items {
-        let preserve = preserve_paths(item);
-        let size = dir_size_recursive(&item.path, &preserve, Path::new(""));
-        total_size += size;
-        let dst = path.join(item.name);
-        copy_item_with_preserve(&item.path, &dst, &preserve).map_err(|e| {
-            let _ = fs::remove_dir_all(&path);
-            AppError::Archive(format!("copy {} failed: {}", item.name, e))
-        })?;
-        if !verify_copy(&item.path, &dst, &preserve) {
-            let _ = fs::remove_dir_all(&path);
-            return Err(AppError::Archive(format!(
-                "copy verification failed for {}",
-                item.name
-            )));
+        match archive_item(item, &path.join(item.name), take) {
+            Ok(transfer) => {
+                total_size += transfer.bytes;
+                archived.push(item.clone());
+            }
+            Err(err) => {
+                if take {
+                    rollback_taken(&path, &archived);
+                }
+                let _ = fsops::remove_tree(&path);
+                return Err(AppError::Archive(format!(
+                    "archiving {} failed: {}",
+                    item.name, err
+                )));
+            }
         }
-        copied.push(item.name);
     }
 
     let meta = ArchiveMeta {
         created: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         name: archive_name.clone(),
-        items: copied.len() as u32,
+        items: archived.len() as u32,
         total_size,
         size_human: format_size(total_size),
         note,
     };
-    fs::write(
+    if let Err(err) = fs::write(
         path.join("_meta.json"),
         serde_json::to_string_pretty(&meta)?,
-    )?;
+    ) {
+        if take {
+            rollback_taken(&path, &archived);
+        }
+        let _ = fsops::remove_tree(&path);
+        return Err(AppError::Archive(format!(
+            "writing snapshot metadata failed: {}",
+            err
+        )));
+    }
 
     Ok(ProfileArchive {
         source: spec.source.to_string(),
@@ -355,8 +225,10 @@ pub fn create_profile(
         Some(label) => format!("{}-{}", timestamp, label.trim()),
         None => timestamp,
     };
-    let archive = write_archive(spec, archive_name, None)?;
+    let archive = write_archive(spec, archive_name, None, spec.clear_current_on_create)?;
     if spec.clear_current_on_create {
+        // The archived items already moved out; this only sweeps up what was left behind
+        // (empty directories, and items that held nothing worth archiving).
         clear_current_items(spec)?;
     }
     Ok(archive)
@@ -369,11 +241,13 @@ pub fn restore_profile(spec: &SnapshotSpec, name: &str) -> Result<(), AppError> 
     }
 
     if !existing_items(spec).is_empty() {
-        let backup_name = format!("auto-{}", Local::now().format("%Y%m%d-%H%M%S"));
+        // The current state is cleared immediately below, so the backup may take it rather than
+        // duplicate it.
         write_archive(
             spec,
-            backup_name,
+            format!("auto-{}", Local::now().format("%Y%m%d-%H%M%S")),
             Some(format!("Automatic backup before restoring {}", name)),
+            true,
         )?;
     }
 
@@ -384,8 +258,8 @@ pub fn restore_profile(spec: &SnapshotSpec, name: &str) -> Result<(), AppError> 
         if !src.exists() {
             continue;
         }
-        let preserve = preserve_paths(item);
-        copy_item_with_preserve(&src, &item.path, &preserve)?;
+        // Copy, never move: the archive has to survive being restored from.
+        fsops::copy_tree(&src, &item.path, &preserve_paths(item))?;
     }
 
     Ok(())
@@ -396,8 +270,7 @@ pub fn delete_profile(spec: &SnapshotSpec, name: &str) -> Result<(), AppError> {
     if !path.exists() {
         return Err(AppError::NotFound(format!("snapshot not found: {}", name)));
     }
-    fs::remove_dir_all(path)?;
-    Ok(())
+    fsops::remove_tree(&path)
 }
 
 pub fn rename_profile(spec: &SnapshotSpec, old: &str, new: &str) -> Result<(), AppError> {
@@ -512,5 +385,72 @@ mod tests {
         assert!(current.join("config.toml").exists());
         assert!(current.join("sessions").join("rollout.jsonl").exists());
         assert!(current.join("nested").join("state.json").exists());
+    }
+
+    #[test]
+    fn taking_snapshot_leaves_no_temporary_stash_next_to_the_live_directory() {
+        let temp = TestDir::new("profile-archiver-stash");
+        let current = temp.path.join("current");
+        fs::create_dir_all(&current).expect("current");
+        fs::write(current.join("auth.json"), "secret").expect("auth");
+        fs::write(current.join("config.toml"), "config").expect("config");
+
+        let spec = SnapshotSpec {
+            source: "test",
+            display_name: "Test Agent",
+            archive_root: temp.path.join("archives"),
+            items: vec![SnapshotItem {
+                name: "agent",
+                path: current.clone(),
+                preserve: &["auth.json"],
+            }],
+            clear_current_on_create: true,
+        };
+
+        create_profile(&spec, None).expect("create profile");
+
+        let leftovers: Vec<String> = fs::read_dir(&temp.path)
+            .expect("read temp")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.starts_with(".dejavu-keep-"))
+            .collect();
+        assert!(leftovers.is_empty(), "stash left behind: {:?}", leftovers);
+        assert_eq!(
+            fs::read_to_string(current.join("auth.json")).expect("auth kept"),
+            "secret"
+        );
+    }
+
+    #[test]
+    fn snapshot_that_does_not_clear_current_data_keeps_it_in_place() {
+        let temp = TestDir::new("profile-archiver-copy");
+        let current = temp.path.join("current");
+        fs::create_dir_all(&current).expect("current");
+        fs::write(current.join("config.toml"), "config").expect("config");
+
+        let spec = SnapshotSpec {
+            source: "test",
+            display_name: "Test Agent",
+            archive_root: temp.path.join("archives"),
+            items: vec![SnapshotItem {
+                name: "agent",
+                path: current.clone(),
+                preserve: &[],
+            }],
+            clear_current_on_create: false,
+        };
+
+        let archive = create_profile(&spec, None).expect("create profile");
+
+        assert_eq!(archive.total_size, 6);
+        assert!(current.join("config.toml").exists());
+        assert!(temp
+            .path
+            .join("archives")
+            .join(&archive.name)
+            .join("agent")
+            .join("config.toml")
+            .exists());
     }
 }
