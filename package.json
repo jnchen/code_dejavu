@@ -1,6 +1,6 @@
 {
   "name": "code-dejavu",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Local coding-agent session and profile manager",
   "homepage": "https://github.com/jnchen/code_dejavu",
   "repository": {

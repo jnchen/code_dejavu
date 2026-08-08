@@ -1,6 +1,6 @@
 [package]
 name = "code-dejavu"
-version = "0.2.3"
+version = "0.3.0"
 description = "Coding agent session and profile manager"
 authors = ["Code Déjà Vu contributors"]
 edition = "2021"
