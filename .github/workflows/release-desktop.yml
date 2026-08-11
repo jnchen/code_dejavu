@@ -31,7 +31,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -71,17 +71,17 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -134,7 +134,7 @@ jobs:
           Copy-Item -LiteralPath $signature -Destination "release-assets/$assetName.sig"
 
       - name: Upload Windows release files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-windows-x86_64
           path: release-assets/
@@ -148,17 +148,17 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -226,7 +226,7 @@ jobs:
           cp "${updaters[0]}.sig" "release-assets/$updater_name.sig"
 
       - name: Upload macOS release files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-darwin-aarch64
           path: release-assets/
@@ -243,12 +243,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Download signed release files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: release-assets
@@ -311,13 +311,22 @@ jobs:
           }
           NODE
 
-          if ! notes="$(gh api \
-            --method POST \
-            "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
-            -f tag_name="$RELEASE_TAG" \
-            --jq .body 2>/dev/null)"; then
+          notes="$(awk -v version="$VERSION" '
+            $0 == "## " version || index($0, "## " version " ") == 1 {
+              capture = 1
+              next
+            }
+            capture && /^## / { exit }
+            capture {
+              if (!content && $0 == "") next
+              content = 1
+              print
+            }
+          ' CHANGELOG.md)"
+          if [[ -z "${notes//[[:space:]]/}" ]]; then
             notes="Code Déjà Vu $RELEASE_TAG"
           fi
+          printf '%s\n' "$notes" > "$RUNNER_TEMP/release-notes.md"
 
           base_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
           jq -n \
@@ -373,7 +382,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "Code Déjà Vu $RELEASE_TAG" \
-              --generate-notes \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
               --draft
             publish_draft=true
           fi
@@ -381,6 +390,10 @@ jobs:
           gh release upload "$RELEASE_TAG" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
+
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
 
           if [[ "$publish_draft" == "true" ]]; then
             gh release edit "$RELEASE_TAG" \
