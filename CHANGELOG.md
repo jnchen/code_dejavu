@@ -2,7 +2,17 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)，从 `0.2.0` 开始在此记录面向用户的变化。
 
-## 未发布
+## 0.3.1 - 2026-08-11
+
+### 新增
+
+- macOS Apple Silicon 版本现在支持应用内在线更新。Release 会同时提供 DMG、签名的
+  `.app.tar.gz` updater 包，并在 `latest.json` 中发布 `darwin-aarch64` 更新信息。
+
+### 改进
+
+- Windows x64 和 macOS arm64 安装包改由 GitHub Actions 自动测试、签名和发布；任一
+  平台失败时不会发布不完整的 Release。
 
 ## 0.3.0 - 2026-08-08
 
@@ -58,4 +68,3 @@
 
 - 修复 Claude Code 会话页面一直停留在“加载中”的前端渲染异常。
 - 修复会话标题缺失时调用 `trim()` 导致整个列表渲染失败的问题。
-
