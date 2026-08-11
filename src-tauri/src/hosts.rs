@@ -131,7 +131,7 @@ impl Host {
         if relative.is_empty() {
             root
         } else {
-            root.join(relative)
+            PathBuf::from(format!(r"{}\{}", root.to_string_lossy(), relative))
         }
     }
 

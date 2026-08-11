@@ -10,11 +10,15 @@
 
 #![cfg(test)]
 
-use crate::agents::{AgentProvider, ClaudeProvider, CodexProvider, MultiHostProvider};
+use crate::agents::AgentProvider;
+#[cfg(windows)]
+use crate::agents::{ClaudeProvider, CodexProvider, MultiHostProvider};
+#[cfg(windows)]
 use crate::hosts::{self, Host};
 use crate::paths::ClaudePaths;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -28,6 +32,7 @@ fn timed<T>(label: &str, f: impl FnOnce() -> T) -> T {
 /// Report what discovery sees on this machine. Not an assertion about *how many* homes exist —
 /// that depends on the box — but it does assert the thing that is always true: a directory an
 /// agent merely created must not be mistaken for one it uses.
+#[cfg(windows)]
 #[test]
 #[ignore = "reads the real WSL shares on this machine"]
 fn wsl_discovery_reports_real_agent_homes() {
@@ -52,6 +57,7 @@ fn wsl_discovery_reports_real_agent_homes() {
     }
 }
 
+#[cfg(windows)]
 const AGENT_MARKER_PROBES: [&str; 7] = [
     ".claude/projects",
     ".claude/history.jsonl",
@@ -63,6 +69,7 @@ const AGENT_MARKER_PROBES: [&str; 7] = [
 ];
 
 /// The first WSL distribution installed on this machine, or `None`.
+#[cfg(windows)]
 fn any_distro() -> Option<String> {
     use std::os::windows::process::CommandExt;
     let output = std::process::Command::new("wsl.exe")
@@ -82,6 +89,7 @@ fn any_distro() -> Option<String> {
 }
 
 /// Run a command inside the distro and return its stdout.
+#[cfg(windows)]
 fn wsl_capture(distro: &str, script: &str) -> String {
     use std::os::windows::process::CommandExt;
     let output = std::process::Command::new("wsl.exe")
@@ -99,6 +107,7 @@ fn wsl_capture(distro: &str, script: &str) -> String {
 /// share access can itself restart a stopped distro), so a fixture there can vanish between being
 /// written from Windows and being read from bash. `$HOME` is also where real agent data lives and
 /// the only place discovery looks, so it is the honest location to test against.
+#[cfg(windows)]
 struct WslFixture {
     distro: String,
     /// Path as the distro sees it, e.g. `/home/me/.dejavu-smoke-1234`.
@@ -107,6 +116,7 @@ struct WslFixture {
     home: PathBuf,
 }
 
+#[cfg(windows)]
 impl WslFixture {
     fn new(distro: String) -> Self {
         let host = Host::Wsl {
@@ -150,6 +160,7 @@ impl WslFixture {
     }
 }
 
+#[cfg(windows)]
 impl Drop for WslFixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.home);
@@ -162,6 +173,7 @@ impl Drop for WslFixture {
 /// This is the part that cannot be proven with a temp directory on `C:`: the paths are genuine
 /// `\\wsl.localhost` UNC paths, the recorded `cwd` values are genuine POSIX paths, and the project
 /// slugs are encoded the way Claude Code encodes them on Linux.
+#[cfg(windows)]
 #[test]
 #[ignore = "writes a fixture into this machine's WSL /tmp, then removes it"]
 fn wsl_fixture_is_read_end_to_end_through_the_provider_stack() {
@@ -370,6 +382,7 @@ fn wsl_fixture_is_read_end_to_end_through_the_provider_stack() {
 /// The project directory deliberately contains a space and a single quote — the two things naive
 /// quoting gets wrong — and an env var is set from the app config, so a shredded command line shows
 /// up as a failure rather than as a subtly empty variable.
+#[cfg(windows)]
 #[test]
 #[ignore = "runs wsl.exe on this machine"]
 fn wsl_shell_script_runs_intact_inside_the_distro() {
@@ -436,6 +449,7 @@ fn wsl_shell_script_runs_intact_inside_the_distro() {
 /// A started terminal writes its own window; nothing can be captured from it, so the script drops
 /// a marker file the test then reads back over the share. That is what proves the extra `cmd` and
 /// `start` parsing layers do not shred the command the way `--` did.
+#[cfg(windows)]
 #[test]
 #[ignore = "opens a real terminal window on this machine"]
 fn wsl_terminal_launch_path_executes_the_script() {
