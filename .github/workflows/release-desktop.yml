@@ -1,0 +1,389 @@
+name: Release desktop apps
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag, for example v0.4.0
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Validate tag, version, and updater secrets
+        id: release
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must look like v1.2.3; received: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          version="$(node -p "require('./package.json').version")"
+          cargo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -1)"
+          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [[ "$RELEASE_TAG" != "v$version" || "$cargo_version" != "$version" || "$tauri_version" != "$version" ]]; then
+            echo "Version mismatch: tag=$RELEASE_TAG package=$version cargo=$cargo_version tauri=$tauri_version" >&2
+            exit 1
+          fi
+
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" || -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD must be configured as repository secrets." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    name: Build Windows x64
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check frontend
+        run: pnpm check
+
+      - name: Test Rust backend
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Build signed NSIS installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --ci
+
+      - name: Prepare Windows release files
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $sourceDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
+          $installers = @(Get-ChildItem -LiteralPath $sourceDir -File -Filter "*-setup.exe")
+          if ($installers.Count -ne 1) {
+            throw "Expected one NSIS installer in $sourceDir; found $($installers.Count)"
+          }
+
+          $installer = $installers[0]
+          $signature = "$($installer.FullName).sig"
+          if (-not (Test-Path -LiteralPath $signature -PathType Leaf)) {
+            throw "Updater signature not found: $signature"
+          }
+
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          $assetName = "code-dejavu_${env:VERSION}_x64-setup.exe"
+          Copy-Item -LiteralPath $installer.FullName -Destination "release-assets/$assetName"
+          Copy-Item -LiteralPath $signature -Destination "release-assets/$assetName.sig"
+
+      - name: Upload Windows release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x86_64
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 30
+
+  build-macos:
+    name: Build macOS arm64
+    needs: validate
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check frontend
+        run: pnpm check
+
+      - name: Test Rust backend
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Build signed updater and DMG
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: >-
+          pnpm tauri build
+          --target aarch64-apple-darwin
+          --bundles app,dmg
+          --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+          --ci
+
+      - name: Prepare macOS release files
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          dmg_dir="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
+          app_dir="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+          shopt -s nullglob
+          dmgs=("$dmg_dir"/*.dmg)
+          updaters=("$app_dir"/*.app.tar.gz)
+
+          if [[ ${#dmgs[@]} -ne 1 ]]; then
+            echo "Expected one DMG in $dmg_dir; found ${#dmgs[@]}" >&2
+            exit 1
+          fi
+          if [[ ${#updaters[@]} -ne 1 ]]; then
+            echo "Expected one updater archive in $app_dir; found ${#updaters[@]}" >&2
+            exit 1
+          fi
+          if [[ ! -f "${updaters[0]}.sig" ]]; then
+            echo "Updater signature not found: ${updaters[0]}.sig" >&2
+            exit 1
+          fi
+
+          mkdir -p release-assets
+          dmg_name="code-dejavu_${VERSION}_aarch64.dmg"
+          updater_name="code-dejavu_${VERSION}_aarch64.app.tar.gz"
+          cp "${dmgs[0]}" "release-assets/$dmg_name"
+          cp "${updaters[0]}" "release-assets/$updater_name"
+          cp "${updaters[0]}.sig" "release-assets/$updater_name.sig"
+
+      - name: Upload macOS release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-darwin-aarch64
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - validate
+      - build-windows
+      - build-macos
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Download signed release files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate multi-platform updater manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          windows_asset="code-dejavu_${VERSION}_x64-setup.exe"
+          macos_dmg="code-dejavu_${VERSION}_aarch64.dmg"
+          macos_asset="code-dejavu_${VERSION}_aarch64.app.tar.gz"
+          expected=(
+            "$windows_asset"
+            "$windows_asset.sig"
+            "$macos_dmg"
+            "$macos_asset"
+            "$macos_asset.sig"
+          )
+          for asset in "${expected[@]}"; do
+            if [[ ! -s "release-assets/$asset" ]]; then
+              echo "Missing or empty release asset: $asset" >&2
+              exit 1
+            fi
+          done
+
+          VERSION="$VERSION" node <<'NODE'
+          const fs = require("node:fs");
+          const config = require("./src-tauri/tauri.conf.json");
+          const version = process.env.VERSION;
+
+          function keyId(encodedText, label) {
+            const text = Buffer.from(encodedText.trim(), "base64").toString("utf8");
+            const packetLine = text.trim().split(/\r?\n/)[1];
+            if (!packetLine) {
+              throw new Error(`${label} is not a valid Minisign envelope`);
+            }
+            const packet = Buffer.from(packetLine, "base64");
+            if (packet.length < 10) {
+              throw new Error(`${label} has an invalid Minisign packet`);
+            }
+            return packet.subarray(2, 10).toString("hex");
+          }
+
+          const publicKeyId = keyId(config.plugins.updater.pubkey, "updater public key");
+          const signatures = {
+            Windows: `release-assets/code-dejavu_${version}_x64-setup.exe.sig`,
+            macOS: `release-assets/code-dejavu_${version}_aarch64.app.tar.gz.sig`,
+          };
+
+          for (const [platform, path] of Object.entries(signatures)) {
+            const signatureKeyId = keyId(fs.readFileSync(path, "utf8"), `${platform} signature`);
+            if (signatureKeyId !== publicKeyId) {
+              throw new Error(`${platform} updater was signed by a key that does not match tauri.conf.json`);
+            }
+          }
+          NODE
+
+          if ! notes="$(gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$RELEASE_TAG" \
+            --jq .body 2>/dev/null)"; then
+            notes="Code Déjà Vu $RELEASE_TAG"
+          fi
+
+          base_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$notes" \
+            --arg pub_date "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --arg windows_signature "$(<"release-assets/$windows_asset.sig")" \
+            --arg windows_url "$base_url/$windows_asset" \
+            --arg macos_signature "$(<"release-assets/$macos_asset.sig")" \
+            --arg macos_url "$base_url/$macos_asset" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "windows-x86_64": {
+                  signature: $windows_signature,
+                  url: $windows_url
+                },
+                "darwin-aarch64": {
+                  signature: $macos_signature,
+                  url: $macos_url
+                }
+              }
+            }' > release-assets/latest.json
+
+          jq -e \
+            --arg version "$VERSION" \
+            '.version == $version and
+             (.platforms["windows-x86_64"].signature | length > 0) and
+             (.platforms["darwin-aarch64"].signature | length > 0)' \
+            release-assets/latest.json >/dev/null
+
+          (
+            cd release-assets
+            sha256sum "$windows_asset" "$macos_dmg" "$macos_asset" > SHA256SUMS.txt
+          )
+
+      - name: Upload assets and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          publish_draft=false
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == "true" ]]; then
+              publish_draft=true
+            fi
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Code Déjà Vu $RELEASE_TAG" \
+              --generate-notes \
+              --draft
+            publish_draft=true
+          fi
+
+          gh release upload "$RELEASE_TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+          if [[ "$publish_draft" == "true" ]]; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft=false
+          fi
