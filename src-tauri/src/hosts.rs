@@ -1,7 +1,7 @@
 //! Where an agent's data physically lives.
 //!
-//! A single machine can run Claude Code / Codex / OpenCode twice over: once natively, and once
-//! inside one or more WSL distributions, each with its own `$HOME` and its own `~/.claude`. Those
+//! A single machine can run Claude Code / Codex / OpenCode / PiAgent twice over: once natively, and
+//! once inside one or more WSL distributions, each with its own `$HOME` and agent data. Those
 //! are the *same agent*, so they stay one source in the UI; what differs is the **host** the data
 //! sits on.
 //!
@@ -36,7 +36,7 @@ const USER_SEPARATOR: char = '~';
 /// treating it as a host produces a badge for a store with nothing in it — worse, it can make a
 /// distro look multi-account and force `~user` suffixes onto keys for no reason. Each entry below
 /// is a store a provider would actually read.
-const AGENT_MARKERS: [&str; 7] = [
+const AGENT_MARKERS: [&str; 8] = [
     ".claude/projects",
     ".claude/history.jsonl",
     ".claude.json",
@@ -44,6 +44,7 @@ const AGENT_MARKERS: [&str; 7] = [
     ".local/share/opencode/opencode.db",
     ".config/opencode/opencode.json",
     ".config/opencode/opencode.jsonc",
+    ".pi/agent/sessions",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

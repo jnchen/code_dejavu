@@ -1,12 +1,12 @@
 //! One agent, several machines.
 //!
-//! Claude Code / Codex / OpenCode can each be installed twice on the same box: natively, and again
-//! inside one or more WSL distributions, each with its own `$HOME`. Those are not different tools,
+//! Claude Code / Codex / OpenCode / PiAgent can each be installed twice on the same box: natively,
+//! and again inside one or more WSL distributions, each with its own `$HOME`. Those are not different tools,
 //! so they must not become different sources in the UI — but they *are* different stores, with
 //! independent session files, snapshots and rules.
 //!
-//! [`MultiHostProvider`] resolves that: it presents itself as the single `claude` / `codex` /
-//! `opencode` source and fans every call out to one real provider per host, tagging the opaque keys
+//! [`MultiHostProvider`] resolves that: it presents itself as one logical source and fans every
+//! call out to one real provider per host, tagging the opaque keys
 //! that come back so a later call can be routed to the store it came from. Each inner provider is
 //! the ordinary, unmodified provider — it simply has a different home and [`Host`].
 //!

@@ -26,6 +26,7 @@ pub mod claude;
 pub mod codex;
 pub mod multi_host;
 pub mod opencode;
+pub mod pi;
 
 /// Short metadata scans (session identity, project roots) serve page loads and must not queue
 /// behind the global indexing workers. A separate, bounded pool also lets providers coalesce a
@@ -582,6 +583,7 @@ pub use claude::ClaudeProvider;
 pub use codex::CodexProvider;
 pub use multi_host::MultiHostProvider;
 pub use opencode::OpenCodeProvider;
+pub use pi::PiProvider;
 
 /// One multi-host provider per agent. Each starts with only the native install registered; WSL
 /// homes are adopted later (see `hosts::discover_wsl_homes`), because probing a distro's share
@@ -601,6 +603,10 @@ pub fn default_providers(claude_paths: ClaudePaths) -> Vec<Arc<MultiHostProvider
         Arc::new(MultiHostProvider::new(
             Arc::new(OpenCodeProvider::new()),
             Box::new(|host, home| Arc::new(OpenCodeProvider::for_host(host, home))),
+        )),
+        Arc::new(MultiHostProvider::new(
+            Arc::new(PiProvider::new()),
+            Box::new(|host, home| Arc::new(PiProvider::for_host(host, home))),
         )),
     ]
 }

@@ -11,6 +11,7 @@ archive, or edit?
 - Anthropic Claude Code docs: https://code.claude.com/docs/llms.txt
 - OpenAI Codex CLI docs: https://developers.openai.com/codex/cli
 - OpenCode docs: https://opencode.ai/docs/
+- Pi coding agent repository/docs: https://github.com/earendil-works/pi
 - Windsurf docs index: https://docs.windsurf.com/llms.txt
 - Cursor docs: https://cursor.com/docs
 - Gemini CLI repository/docs: https://github.com/google-gemini/gemini-cli
@@ -43,6 +44,7 @@ These have useful local artifacts or are already implemented here.
 | Claude Code | Very high | Rich local/project surfaces, session history, CLAUDE.md, settings, hooks, skills, rules, memory, subagents, archive-like profiles. |
 | Codex CLI | High | Local sessions are already implemented in this repo; config and instruction surfaces should be added carefully. |
 | OpenCode | High | Local SQLite session store is already implemented; child sessions/subagents are readable. |
+| PiAgent | High | Append-only JSONL session trees are implemented with search, usage, resume, and multi-host support. |
 | Gemini CLI | Medium-high | Has GEMINI.md, settings, built-in tools, shell/file tools, and MCP. Need inspect local session durability before full provider. |
 | Aider | Medium | Mature CLI with convention files and repo-map behavior. Session artifacts may be less rich than Claude/Codex/OpenCode. |
 | Cline / Roo Code | Medium | Strong local/editor extension model, explicit rules and memory concepts, MCP. Need inspect VS Code storage and extension files. |
@@ -107,6 +109,22 @@ Product implication:
 - Keep SQLite session reading as read-only.
 - Treat child sessions as `sessions.subagents`.
 - Keep OpenCode config/instruction surfaces read-only until write semantics are verified.
+
+### PiAgent
+
+PiAgent is implemented as a session provider. It reads the default
+`~/.pi/agent/sessions/**.jsonl` store plus configured session directories, preserves persisted tree
+branches in source order, and extracts messages, thinking, tool calls/results, model context, usage,
+session names, search documents, and `pi --session` resume commands.
+
+Product implication:
+
+- Keep session read/search/resume first-class on native macOS/Windows and WSL installs.
+- Keep process association view-only because Pi does not persist an exact per-session process lock.
+- Snapshot and restore the Pi agent root while preserving `auth.json`; archived sessions remain
+  indexed and readable. Custom `sessionDir` paths outside the agent root are not snapshot-managed.
+- Do not claim Pi rules, memory, instructions, or subagents until their contracts are independently
+  verified and implemented.
 
 ### Gemini CLI
 

@@ -490,7 +490,7 @@
   }
 
   function canInspectSessionProcesses(session: SessionSummary): boolean {
-    return ["codex", "claude", "opencode"].includes(session.source) && !session.archive_name;
+    return ["codex", "claude", "opencode", "pi"].includes(session.source) && !session.archive_name;
   }
 
   function canStopSessionProcesses(session: SessionSummary): boolean {

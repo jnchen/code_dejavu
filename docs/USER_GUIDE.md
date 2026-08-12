@@ -1,7 +1,7 @@
 # Code Déjà Vu 操作指南
 
-Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI 与 OpenCode 留在本机的会话、
-指令和配置资料。本指南以当前公开版本为准；不同 Agent 支持的功能会略有差异。
+Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI、OpenCode 与 PiAgent 留在本机的
+会话、指令和配置资料。本指南以当前公开版本为准；不同 Agent 支持的功能会略有差异。
 
 ![Code Déjà Vu 控制台主页](../dashboard_snapshot.png)
 
@@ -32,6 +32,7 @@ Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI 与 OpenCode 
 | Claude Code | `~/.claude/projects/` | 同时支持规则、记忆、指令与工作流 |
 | Codex CLI | `~/.codex/sessions/` | 会话通常按日期分目录保存 |
 | OpenCode | `~/.local/share/opencode/opencode.db` | 会话保存在 SQLite 数据库中 |
+| PiAgent | `~/.pi/agent/sessions/` | 支持默认目录及已发现项目的自定义 `sessionDir` |
 
 `~` 表示当前用户主目录。如果某个 Agent 从未运行、尚未产生会话，或数据目录不在应用支持的
 默认位置，对应来源会显示“未发现本地数据”。
@@ -43,7 +44,7 @@ Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI 与 OpenCode 
 
 ## 五分钟上手
 
-1. 打开 **控制台**，确认 Claude Code、Codex CLI 或 OpenCode 至少有一个来源可用。
+1. 打开 **控制台**，确认 Claude Code、Codex CLI、OpenCode 或 PiAgent 至少有一个来源可用。
 2. 等待搜索索引完成；如果刚产生了新会话，可点击 **刷新**，必要时点击 **重建索引**。
 3. 进入 **会话档案**，选择来源和“当前 / 全部 / 归档”范围。
 4. 打开一条会话，浏览时间线；需要时使用会话内搜索、收藏、置顶、备注或导出。
@@ -68,7 +69,7 @@ Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI 与 OpenCode 
 
 #### 筛选与搜索
 
-- 顶部来源按钮可切换 Claude Code、Codex CLI、OpenCode 或统一时间线。
+- 顶部来源按钮可切换 Claude Code、Codex CLI、OpenCode、PiAgent 或统一时间线。
 - **当前**只显示未归档会话，**归档**只显示快照中的会话，**全部**同时显示两者。
 - 可将搜索范围限制为 **对话**、**工具**或**思考**内容。
 - 普通搜索使用本地索引，速度快，但索引会对超大内容做容量限制。
@@ -176,9 +177,12 @@ Codex 记忆通常是只读的；OpenCode 当前不提供记忆管理。最终�
 4. 需要切换回来时点击 **恢复**。恢复前，应用会为当前资料创建 `auto-*` 自动备份。
 5. 确认不再需要后才点击 **删除**；删除快照无法撤销。
 
-认证文件不会写入快照，并会尽量保留当前登录状态，例如 Codex 的 `auth.json`、OpenCode 的
-`auth.json` / `account.json`。但快照仍可能包含完整会话、项目路径、提示词和配置，不应上传
-到公开位置。
+认证文件不会写入快照，并会尽量保留当前登录状态，例如 Codex 和 PiAgent 的 `auth.json`、
+OpenCode 的 `auth.json` / `account.json`。但快照仍可能包含完整会话、项目路径、提示词和配置，
+不应上传到公开位置。
+
+PiAgent 快照覆盖 `~/.pi/agent`（或 `PI_CODING_AGENT_DIR`）内的会话、设置和模型配置。通过
+`sessionDir` 指向该目录之外的自定义会话目录仍可浏览，但暂不随快照归档或清空。
 
 ### 指令
 
@@ -223,14 +227,17 @@ TOML 语法是否正确。
 
 ## 功能支持概览
 
-| 功能 | Claude Code | Codex CLI | OpenCode |
-| --- | --- | --- | --- |
-| 会话浏览、搜索、恢复 | 支持 | 支持 | 支持 |
-| 子代理展示 | 支持 | 支持 | 支持 |
-| 指令读写 | 支持 | 支持 | 支持 |
-| 规则管理 | 读写 | 只读 | 只读 |
-| 记忆管理 | 读写 | 只读，取决于本地数据库 | 暂不支持 |
-| 快照归档与恢复 | 支持 | 支持 | 支持 |
+| 功能 | Claude Code | Codex CLI | OpenCode | PiAgent |
+| --- | --- | --- | --- | --- |
+| 会话浏览、搜索、恢复 | 支持 | 支持 | 支持 | 支持 |
+| 子代理展示 | 支持 | 支持 | 支持 | 暂不支持 |
+| 指令读写 | 支持 | 支持 | 支持 | 暂不支持 |
+| 规则管理 | 读写 | 只读 | 只读 | 暂不支持 |
+| 记忆管理 | 读写 | 只读，取决于本地数据库 | 暂不支持 | 暂不支持 |
+| 快照归档与恢复 | 支持 | 支持 | 支持 | 支持 Agent 根目录内数据 |
+
+PiAgent 会话是带 `id` / `parentId` 的追加式树。Code Déjà Vu 按文件中的持久化顺序展示
+所有分支，因此切换分支后留下的旧分支内容也不会被隐藏。
 
 实际能力取决于 Agent 版本和本地数据是否存在；界面会隐藏当前来源不支持的操作。
 
@@ -248,7 +255,9 @@ TOML 语法是否正确。
 ### 没有检测到 Agent
 
 先确认对应 CLI 在当前系统用户下至少运行过一次，并已生成默认数据目录。Code Déjà Vu 当前
-不会自动搜索任意自定义目录。
+不会自动搜索任意自定义目录。PiAgent 例外支持 `PI_CODING_AGENT_DIR`、
+`PI_CODING_AGENT_SESSION_DIR`、全局 `settings.json`，以及已发现项目的 `.pi/settings.json`
+中的 `sessionDir`。
 
 ### 新会话没有出现
 

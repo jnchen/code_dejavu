@@ -1,7 +1,7 @@
 # Code Déjà Vu
 
 Code Déjà Vu 是一个基于 Tauri、SvelteKit 与 Rust 的本地桌面工具，用于统一浏览和管理
-Claude Code、Codex CLI 与 OpenCode 留在本机的会话、指令和配置资料。
+Claude Code、Codex CLI、OpenCode 与 PiAgent 留在本机的会话、指令和配置资料。
 
 ![Code Déjà Vu 控制台主页](dashboard_snapshot.png)
 

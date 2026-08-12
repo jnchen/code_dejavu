@@ -232,7 +232,43 @@ fn process_command(process: &sysinfo::Process) -> String {
     command.chars().take(600).collect()
 }
 
+fn is_pi_executable_name(value: &std::ffi::OsStr) -> bool {
+    // Split both path separators explicitly so Windows command paths remain testable on macOS.
+    let raw = value.to_string_lossy();
+    let name = raw
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(&raw)
+        .to_ascii_lowercase();
+    matches!(name.as_str(), "pi" | "pi.exe" | "pi.cmd")
+}
+
+fn is_pi_package_path(value: &std::ffi::OsStr) -> bool {
+    value
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .replace('\\', "/")
+        .contains("/pi-coding-agent/")
+}
+
 fn process_matches_source(process: &sysinfo::Process, source: &str) -> bool {
+    if source == "pi" {
+        if is_pi_executable_name(process.name())
+            || process
+                .exe()
+                .is_some_and(|path| is_pi_executable_name(path.as_os_str()))
+            || process
+                .cmd()
+                .first()
+                .is_some_and(|arg| is_pi_executable_name(arg))
+        {
+            return true;
+        }
+        // npm installations often expose the process as `node .../pi-coding-agent/.../cli.js`.
+        // Match the package directory, never a generic `contains("pi")`, because the CLI name is
+        // too short and would otherwise classify unrelated applications as PiAgent.
+        return process.cmd().iter().any(|arg| is_pi_package_path(arg));
+    }
     let needle = match source {
         "codex" => "codex",
         "claude" => "claude",
@@ -412,7 +448,7 @@ fn list_session_processes_blocking(
     source: Option<String>,
 ) -> Result<Vec<SessionProcessInfo>, AppError> {
     let source = source.as_deref().unwrap_or("codex");
-    if !matches!(source, "codex" | "claude" | "opencode") {
+    if !matches!(source, "codex" | "claude" | "opencode" | "pi") {
         return Ok(Vec::new());
     }
     let mut system = System::new();
@@ -627,7 +663,8 @@ pub async fn resume_session(
 }
 
 /// Find agent processes attached to the current session. Codex uses its per-session writer lock for
-/// project-based matching; Claude and OpenCode expose project-level associations for inspection.
+/// project-based matching; Claude, OpenCode and PiAgent expose project-level associations for
+/// inspection.
 /// A process is returned once per agent process tree.
 #[tauri::command]
 pub async fn list_session_processes(
@@ -643,7 +680,7 @@ pub async fn list_session_processes(
 }
 
 /// Stop a previously listed Codex process tree after revalidating its PID, start time, command and
-/// working directory. Claude and OpenCode are intentionally view-only.
+/// working directory. Claude, OpenCode and PiAgent are intentionally view-only.
 #[tauri::command]
 pub async fn stop_session_process(
     pid: u32,
@@ -731,6 +768,36 @@ pub async fn open_in_terminal(project_path: String) -> Result<(), AppError> {
     })
     .await
     .map_err(|e| AppError::Archive(e.to_string()))?
+}
+
+#[cfg(test)]
+mod process_match_tests {
+    use super::{is_pi_executable_name, is_pi_package_path};
+    use std::ffi::OsStr;
+
+    #[test]
+    fn pi_process_names_are_exact_and_cross_platform() {
+        assert!(is_pi_executable_name(OsStr::new("/usr/local/bin/pi")));
+        assert!(is_pi_executable_name(OsStr::new(
+            r"C:\\Users\\me\\bin\\pi.cmd"
+        )));
+        assert!(is_pi_executable_name(OsStr::new("PI.EXE")));
+        assert!(!is_pi_executable_name(OsStr::new("pilot")));
+        assert!(!is_pi_executable_name(OsStr::new("pip")));
+    }
+
+    #[test]
+    fn scoped_npm_package_path_identifies_pi_without_matching_generic_node() {
+        assert!(is_pi_package_path(OsStr::new(
+            "/usr/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
+        )));
+        assert!(is_pi_package_path(OsStr::new(
+            r"C:\\npm\\node_modules\\@earendil-works\\pi-coding-agent\\dist\\cli.js"
+        )));
+        assert!(!is_pi_package_path(OsStr::new(
+            "/usr/lib/node_modules/typescript/bin/tsc"
+        )));
+    }
 }
 
 /// POSIX single-quote: wrap in '...', escaping embedded single quotes as '\''.
