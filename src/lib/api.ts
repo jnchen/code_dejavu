@@ -13,6 +13,7 @@ import type {
   WorkflowItem,
   ToolsInfo,
   UsageSummary,
+  ModelPriceRefreshResult,
   DashboardSummary,
   IndexStatus,
   DejavuConfig,
@@ -20,6 +21,7 @@ import type {
   InstructionDetail,
   ProjectContext,
   SourceInfo,
+  SessionProcessInfo,
 } from "./types";
 
 let sourcesInFlight: Promise<SourceInfo[]> | null = null;
@@ -180,6 +182,8 @@ export const api = {
     }),
     usageSummary: () =>
       invoke<UsageSummary>("usage_summary"),
+    refreshModelPrices: () =>
+      invoke<ModelPriceRefreshResult>("refresh_model_prices"),
     /** Pre-aggregated dashboard view from the in-memory index (no disk scan). */
     dashboardSummary: () =>
       invoke<DashboardSummary>("dashboard_summary"),
@@ -217,6 +221,10 @@ export const api = {
   shell: {
     resumeSession: (projectPath: string, sessionId: string, source?: string | null) =>
       invoke<void>("resume_session", { projectPath, sessionId, source: source ?? null }),
+    listSessionProcesses: (projectPath: string, sessionId: string, source?: string | null) =>
+      invoke<SessionProcessInfo[]>("list_session_processes", { projectPath, sessionId, source: source ?? null }),
+    stopSessionProcess: (pid: number, startedAt: number, projectPath: string, sessionId: string, source?: string | null) =>
+      invoke<void>("stop_session_process", { pid, startedAt, projectPath, sessionId, source: source ?? null }),
     openInTerminal: (projectPath: string) =>
       invoke<void>("open_in_terminal", { projectPath }),
     openExternal: (url: string) => invoke<void>("open_external", { url }),

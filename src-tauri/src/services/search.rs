@@ -6,6 +6,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -433,6 +434,24 @@ impl SearchEngine {
             by_project,
             by_day: by_key(by_day),
         }
+    }
+
+    /// Every concrete model id present in current session metadata. Unlike the usage buckets,
+    /// this includes all model contexts from sessions that switched models mid-conversation.
+    pub fn discovered_models(&self) -> Vec<String> {
+        let mut models: HashSet<String> = self
+            .sessions
+            .iter()
+            .filter(|session| session.archive_name.is_none())
+            .flat_map(|session| session.model_contexts.iter())
+            .filter_map(|context| context.model.as_deref())
+            .map(str::trim)
+            .filter(|model| !model.is_empty() && *model != "未知")
+            .map(str::to_string)
+            .collect();
+        let mut models: Vec<String> = models.drain().collect();
+        models.sort_by_key(|model| model.to_ascii_lowercase());
+        models
     }
 
     /// Pre-aggregate the dashboard view (recent / activity / top projects / per-source counts)
@@ -1307,11 +1326,16 @@ pub fn rebuild(engine: &SharedSearchEngine, providers: &[Arc<dyn AgentProvider>]
     true
 }
 
-/// Cheap change fingerprint over every provider's watched roots: (file_count, latest_mtime_secs).
-/// Only stats files (never reads them), so it stays fast even for large session stores.
-fn roots_fingerprint(providers: &[Arc<dyn AgentProvider>]) -> (u64, u64) {
+/// Cheap change fingerprint over every provider's watched roots.
+///
+/// The path fingerprint matters for snapshot operations: moving an OpenCode database from the
+/// live data directory into an archive preserves its size and mtime, so a count/latest-mtime pair
+/// alone would miss the move and leave the index pointing at the deleted live database.
+/// Only metadata is read (never file contents), so this stays fast even for large session stores.
+fn roots_fingerprint(providers: &[Arc<dyn AgentProvider>]) -> (u64, u64, u64) {
     let mut count = 0u64;
     let mut latest = 0u64;
+    let mut paths = 0u64;
     for provider in providers {
         for root in provider.data_roots() {
             if !root.exists() {
@@ -1322,9 +1346,16 @@ fn roots_fingerprint(providers: &[Arc<dyn AgentProvider>]) -> (u64, u64) {
                     continue;
                 }
                 count += 1;
-                if let Some(secs) = entry
-                    .metadata()
-                    .ok()
+                let metadata = entry.metadata().ok();
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                entry.path().to_string_lossy().hash(&mut hasher);
+                metadata
+                    .as_ref()
+                    .map(|metadata| metadata.len())
+                    .hash(&mut hasher);
+                paths = paths.wrapping_add(hasher.finish());
+                if let Some(secs) = metadata
+                    .as_ref()
                     .and_then(|m| m.modified().ok())
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs())
@@ -1336,7 +1367,7 @@ fn roots_fingerprint(providers: &[Arc<dyn AgentProvider>]) -> (u64, u64) {
             }
         }
     }
-    (count, latest)
+    (count, latest, paths)
 }
 
 /// Background poller that keeps the search index fresh without an external file-watch dependency.
@@ -1363,7 +1394,7 @@ pub fn spawn_auto_refresh(engine: SharedSearchEngine, providers: Vec<Arc<dyn Age
         }
         let mut last = roots_fingerprint(&providers);
         let mut interval = MIN_REFRESH_INTERVAL;
-        let mut pending_change: Option<((u64, u64), Instant)> = None;
+        let mut pending_change: Option<((u64, u64, u64), Instant)> = None;
         loop {
             std::thread::sleep(interval);
             let current = roots_fingerprint(&providers);

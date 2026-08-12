@@ -284,6 +284,7 @@ pub fn rename_profile(paths: &ClaudePaths, old: &str, new: &str) -> Result<(), A
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::{AgentProvider, ClaudeProvider};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -350,6 +351,20 @@ mod tests {
         );
         assert!(!paths.projects_dir.exists());
         assert!(!paths.claude_md.exists());
+        assert!(
+            ClaudeProvider::new(paths.clone()).available(),
+            "a snapshot-only Claude install must remain visible"
+        );
+        let indexed = ClaudeProvider::new(paths.clone()).index_documents();
+        assert_eq!(
+            indexed.docs.len(),
+            1,
+            "archived Claude session must be indexed"
+        );
+        assert_eq!(
+            indexed.docs[0].archive_name.as_deref(),
+            Some(archive.name.as_str())
+        );
         // Ephemeral caches are dropped, not archived.
         assert!(!paths.claude_dir.join("cache").exists());
         assert!(!archived.join("cache").exists());

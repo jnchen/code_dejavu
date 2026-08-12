@@ -425,7 +425,10 @@ impl AgentProvider for ClaudeProvider {
         "Claude Code"
     }
     fn available(&self) -> bool {
-        self.paths.projects_dir.exists()
+        // A snapshot-only install is still readable: archived sessions and profiles live under
+        // `.claude/_archives` after `projects` has deliberately been moved out of the live store.
+        // Checking only `projects` made the UI disable Claude and hide those intact archives.
+        self.paths.claude_dir.exists() || self.paths.archive_root.exists()
     }
     fn data_roots(&self) -> Vec<PathBuf> {
         vec![

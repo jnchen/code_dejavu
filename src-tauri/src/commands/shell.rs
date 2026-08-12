@@ -1,8 +1,12 @@
 use crate::agents::ProviderRegistry;
 use crate::error::AppError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
 use tauri::State;
 
 /// One USD-per-1M-tokens pricing row, matched by case-insensitive substring on the model id.
@@ -48,6 +52,33 @@ impl DejavuConfig {
                 .entry("claude".to_string())
                 .or_insert(claude_args);
         }
+        self.prices.retain(|row| {
+            !matches!(
+                (
+                    row.matcher.to_ascii_lowercase().as_str(),
+                    row.input,
+                    row.output
+                ),
+                ("o1", 15.0, 60.0) | ("o3", 15.0, 60.0)
+            )
+        });
+        // Older releases shipped bare `opus`/`sonnet`/`haiku` substring rows. Keep custom edits
+        // intact, but migrate untouched built-ins to real provider/model prefixes.
+        for row in &mut self.prices {
+            let replacement = match (
+                row.matcher.to_ascii_lowercase().as_str(),
+                row.input,
+                row.output,
+            ) {
+                ("opus", 15.0, 75.0) => Some("claude-opus"),
+                ("sonnet", 3.0, 15.0) => Some("claude-sonnet"),
+                ("haiku", 0.8, 4.0) => Some("claude-haiku"),
+                _ => None,
+            };
+            if let Some(replacement) = replacement {
+                row.matcher = replacement.to_string();
+            }
+        }
         self
     }
 
@@ -58,12 +89,21 @@ impl DejavuConfig {
 
 fn default_prices() -> Vec<PriceRow> {
     [
-        ("opus", 15.0, 75.0),
-        ("sonnet", 3.0, 15.0),
-        ("haiku", 0.8, 4.0),
-        ("o3", 15.0, 60.0),
-        ("o1", 15.0, 60.0),
+        ("claude-opus", 15.0, 75.0),
+        ("claude-sonnet", 3.0, 15.0),
+        ("claude-haiku", 0.8, 4.0),
+        ("claude-fable-5", 10.0, 50.0),
+        ("claude-haiku-4-5", 1.0, 5.0),
+        ("claude-opus-4-6", 5.0, 25.0),
+        ("claude-opus-4-7", 5.0, 25.0),
+        ("claude-opus-4-8", 5.0, 25.0),
+        ("claude-sonnet-4-6", 3.0, 15.0),
         ("gpt-5", 1.25, 10.0),
+        ("gpt-5.4", 2.5, 15.0),
+        ("gpt-5.4-mini", 0.75, 4.5),
+        ("gpt-5.4-pro", 30.0, 180.0),
+        ("gpt-5.5", 5.0, 30.0),
+        ("gpt-5.6-sol", 5.0, 30.0),
         ("gpt-4o", 2.5, 10.0),
         ("gpt-4", 2.5, 10.0),
         ("gemini", 1.25, 5.0),
@@ -155,6 +195,310 @@ impl Default for DejavuConfig {
             legacy_claude_args: Vec::new(),
         }
     }
+}
+
+/// An agent process group associated with a session. The PID and start time are both returned so a
+/// later stop request cannot accidentally target a recycled PID.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionProcessInfo {
+    pub pid: u32,
+    pub parent_pid: Option<u32>,
+    pub command: String,
+    pub cwd: Option<String>,
+    pub started_at: u64,
+    pub run_time_seconds: u64,
+    pub process_count: u32,
+    pub match_reason: String,
+}
+
+fn process_command_full(process: &sysinfo::Process) -> String {
+    let args: Vec<String> = process
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let command = if args.is_empty() {
+        process.name().to_string_lossy().into_owned()
+    } else {
+        args.join(" ")
+    };
+    command
+}
+
+fn process_command(process: &sysinfo::Process) -> String {
+    // Command lines can contain very large prompts or arbitrary arguments. Keep the process
+    // picker responsive and avoid turning the UI into an accidental log of an entire command.
+    let command = process_command_full(process);
+    command.chars().take(600).collect()
+}
+
+fn process_matches_source(process: &sysinfo::Process, source: &str) -> bool {
+    let needle = match source {
+        "codex" => "codex",
+        "claude" => "claude",
+        "opencode" => "opencode",
+        _ => return false,
+    };
+    let name = process.name().to_string_lossy().to_ascii_lowercase();
+    let exe = process
+        .exe()
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let first_arg = process
+        .cmd()
+        .first()
+        .map(|arg| {
+            Path::new(arg)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_else(|| arg.to_string_lossy().to_ascii_lowercase())
+        })
+        .unwrap_or_default();
+    name.contains(needle) || exe.contains(needle) || first_arg.contains(needle)
+}
+
+fn normalized_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn process_cwd_matches(process: &sysinfo::Process, project_path: &Path) -> bool {
+    let Some(cwd) = process.cwd() else {
+        return false;
+    };
+    normalized_path(cwd) == normalized_path(project_path)
+}
+
+fn command_mentions_project(command: &str, project_path: &Path) -> bool {
+    let command = command.to_ascii_lowercase().replace('\\', "/");
+    let project = project_path
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .replace('\\', "/");
+    !project.is_empty() && command.contains(&project)
+}
+
+fn session_lock_exists(session_id: &str) -> bool {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return false;
+    }
+    home_dir()
+        .join(".codex")
+        .join("thread-writer-locks")
+        .join(format!("{}.lock", session_id))
+        .is_file()
+}
+
+fn process_matches_session(
+    process: &sysinfo::Process,
+    project_path: &Path,
+    session_id: &str,
+    source: &str,
+) -> Option<&'static str> {
+    if !process_matches_source(process, source) {
+        return None;
+    }
+    let command = process_command_full(process);
+    if !session_id.trim().is_empty() && command.contains(session_id) {
+        return Some("session-id");
+    }
+    // A Codex process can keep the same project cwd while several historical sessions from that
+    // project remain indexed. The per-session writer lock is the active-session signal; require it
+    // before using cwd/command project matching so history cannot inherit the newest process.
+    if source == "codex"
+        && session_lock_exists(session_id)
+        && !project_path.as_os_str().is_empty()
+        && process_cwd_matches(process, project_path)
+    {
+        return Some("session-lock");
+    }
+    // Windows can deny process-cwd reads unless the app has the necessary query privilege. Some
+    // app-server launchers include their project directory in the command line, which is a safe
+    // fallback for that case (and also helps when a server changes its cwd after startup).
+    if source != "codex"
+        && !project_path.as_os_str().is_empty()
+        && process_cwd_matches(process, project_path)
+    {
+        return Some("project");
+    }
+    if source == "codex"
+        && session_lock_exists(session_id)
+        && command_mentions_project(&command, project_path)
+    {
+        return Some("session-lock-command");
+    }
+    if source != "codex" && command_mentions_project(&command, project_path) {
+        return Some("project-command");
+    }
+    None
+}
+
+fn process_parent_map(system: &System) -> HashMap<Pid, Option<Pid>> {
+    system
+        .processes()
+        .iter()
+        .map(|(pid, process)| (*pid, process.parent()))
+        .collect()
+}
+
+fn refresh_processes_for_matching(system: &mut System) {
+    // The short refresh API intentionally skips command lines and working directories. Those
+    // fields are required to associate an agent process with the session, especially on macOS.
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing()
+            .with_cmd(UpdateKind::OnlyIfNotSet)
+            .with_cwd(UpdateKind::OnlyIfNotSet)
+            .with_exe(UpdateKind::OnlyIfNotSet),
+    );
+}
+
+fn agent_pids(system: &System, source: &str) -> HashSet<Pid> {
+    system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| process_matches_source(process, source).then_some(*pid))
+        .collect()
+}
+
+fn agent_root_pid(pid: Pid, parents: &HashMap<Pid, Option<Pid>>, agents: &HashSet<Pid>) -> Pid {
+    let mut root = pid;
+    for _ in 0..64 {
+        let Some(Some(parent)) = parents.get(&root) else {
+            break;
+        };
+        if !agents.contains(parent) {
+            break;
+        }
+        root = *parent;
+    }
+    root
+}
+
+fn process_info_for(
+    system: &System,
+    root: Pid,
+    parents: &HashMap<Pid, Option<Pid>>,
+    agents: &HashSet<Pid>,
+    match_reason: &str,
+) -> Option<SessionProcessInfo> {
+    let process = system.process(root)?;
+    let process_count = agents
+        .iter()
+        .filter(|pid| agent_root_pid(**pid, parents, agents) == root)
+        .count()
+        .min(u32::MAX as usize) as u32;
+    Some(SessionProcessInfo {
+        pid: usize::from(root).min(u32::MAX as usize) as u32,
+        parent_pid: process
+            .parent()
+            .map(|pid| usize::from(pid).min(u32::MAX as usize) as u32),
+        command: process_command(process),
+        cwd: process
+            .cwd()
+            .map(|path| path.to_string_lossy().into_owned()),
+        started_at: process.start_time(),
+        run_time_seconds: process.run_time(),
+        process_count,
+        match_reason: match_reason.to_string(),
+    })
+}
+
+fn list_session_processes_blocking(
+    project_path: String,
+    session_id: String,
+    source: Option<String>,
+) -> Result<Vec<SessionProcessInfo>, AppError> {
+    let source = source.as_deref().unwrap_or("codex");
+    if !matches!(source, "codex" | "claude" | "opencode") {
+        return Ok(Vec::new());
+    }
+    let mut system = System::new();
+    refresh_processes_for_matching(&mut system);
+    let project_path = PathBuf::from(project_path);
+    let parents = process_parent_map(&system);
+    let agents = agent_pids(&system, source);
+    let mut roots: HashMap<Pid, &'static str> = HashMap::new();
+    for (pid, process) in system.processes() {
+        if let Some(reason) = process_matches_session(process, &project_path, &session_id, source) {
+            let root = agent_root_pid(*pid, &parents, &agents);
+            roots
+                .entry(root)
+                .and_modify(|existing| {
+                    if *existing != "session-id" && reason == "session-id" {
+                        *existing = reason;
+                    }
+                })
+                .or_insert(reason);
+        }
+    }
+    let mut result: Vec<_> = roots
+        .into_iter()
+        .filter_map(|(root, reason)| process_info_for(&system, root, &parents, &agents, reason))
+        .collect();
+    result.sort_by(|a, b| b.started_at.cmp(&a.started_at).then(b.pid.cmp(&a.pid)));
+    Ok(result)
+}
+
+fn stop_session_process_blocking(
+    pid: u32,
+    started_at: u64,
+    project_path: String,
+    session_id: String,
+    source: Option<String>,
+) -> Result<(), AppError> {
+    if source.as_deref().is_some_and(|source| source != "codex") {
+        return Err(AppError::Archive("只有 Codex 会话支持进程管理".to_string()));
+    }
+    let mut system = System::new();
+    refresh_processes_for_matching(&mut system);
+    let target = Pid::from(pid as usize);
+    let process = system
+        .process(target)
+        .ok_or_else(|| AppError::NotFound(format!("进程 {} 已不存在", pid)))?;
+    if process.start_time() != started_at {
+        return Err(AppError::Archive(format!("进程 {} 已被其他进程复用", pid)));
+    }
+    let project_path = PathBuf::from(project_path);
+    if process_matches_session(process, &project_path, &session_id, "codex").is_none() {
+        return Err(AppError::Archive(
+            "目标进程不再属于当前 Codex 会话".to_string(),
+        ));
+    }
+
+    let parents = process_parent_map(&system);
+    let agents = agent_pids(&system, "codex");
+    let root = agent_root_pid(target, &parents, &agents);
+    let group: Vec<Pid> = agents
+        .iter()
+        .copied()
+        .filter(|candidate| agent_root_pid(*candidate, &parents, &agents) == root)
+        .collect();
+    let mut attempted = false;
+    // Stop children first so a helper cannot immediately respawn while the app-server is exiting.
+    for candidate in group.iter().rev() {
+        if let Some(process) = system.process(*candidate) {
+            attempted |= process.kill_with(Signal::Term).unwrap_or(false);
+        }
+    }
+    if let Some(process) = system.process(root) {
+        attempted |= process.kill_with(Signal::Term).unwrap_or(false);
+    }
+    if !attempted {
+        return Err(AppError::Archive(format!("无法关闭进程 {}", pid)));
+    }
+
+    thread::sleep(Duration::from_millis(250));
+    refresh_processes_for_matching(&mut system);
+    // A Codex helper may ignore TERM. Escalate only within the already-validated process group.
+    for candidate in group.into_iter().chain(std::iter::once(root)) {
+        if let Some(process) = system.process(candidate) {
+            let _ = process.kill();
+        }
+    }
+    Ok(())
 }
 
 fn config_path() -> std::path::PathBuf {
@@ -277,6 +621,39 @@ pub async fn resume_session(
             AppError::Archive(format!("{} 没有恢复命令", provider.display_name()))
         })?;
         launch_shell(&config, &project_path, Some(command))
+    })
+    .await
+    .map_err(|e| AppError::Archive(e.to_string()))?
+}
+
+/// Find agent processes attached to the current session. Codex uses its per-session writer lock for
+/// project-based matching; Claude and OpenCode expose project-level associations for inspection.
+/// A process is returned once per agent process tree.
+#[tauri::command]
+pub async fn list_session_processes(
+    project_path: String,
+    session_id: String,
+    source: Option<String>,
+) -> Result<Vec<SessionProcessInfo>, AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        list_session_processes_blocking(project_path, session_id, source)
+    })
+    .await
+    .map_err(|e| AppError::Archive(e.to_string()))?
+}
+
+/// Stop a previously listed Codex process tree after revalidating its PID, start time, command and
+/// working directory. Claude and OpenCode are intentionally view-only.
+#[tauri::command]
+pub async fn stop_session_process(
+    pid: u32,
+    started_at: u64,
+    project_path: String,
+    session_id: String,
+    source: Option<String>,
+) -> Result<(), AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        stop_session_process_blocking(pid, started_at, project_path, session_id, source)
     })
     .await
     .map_err(|e| AppError::Archive(e.to_string()))?

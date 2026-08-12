@@ -22,6 +22,7 @@
     SessionMeta,
     SourceInfo,
     SessionModelInfo,
+    SessionProcessInfo,
   } from "$lib/types";
 
   let sessions = $state<SessionSummary[]>([]);
@@ -97,6 +98,12 @@
   let searchHits = $state<SessionSearchHit[]>([]);
   let currentHitIdx = $state(-1);
   let searchingInSession = $state(false);
+  let sessionProcesses = $state<SessionProcessInfo[]>([]);
+  let loadingProcesses = $state(false);
+  let processDialogOpen = $state(false);
+  let selectedProcessPid = $state<number | null>(null);
+  let processActionBusy = $state(false);
+  let processError = $state("");
   let detailSearchTimer: ReturnType<typeof setTimeout> | null = null;
   let detailSearchRequestSeq = 0;
   let detailRequestSeq = 0;
@@ -441,16 +448,25 @@
     contextError = "";
     projectContext = null;
     contextCreatingMemory = false;
+    sessionProcesses = [];
+    selectedProcessPid = null;
+    processDialogOpen = false;
+    processError = "";
     detail = { session: s, records: [], hasMore: true, nextByteOffset: 0, headByteOffset: 0, hasEarlier: false, subagents: [], tailMode: false };
     const request = beginDetailRequest(s, level);
     try {
-      const [result, subagents] = await Promise.all([
+      const [result, subagents, processes] = await Promise.all([
         api.sessions.getDetail(s.project, s.session_id, 0, 100, level, an, s.source),
         sourceInfoFor(s.source)?.capabilities.sessions_subagents
           ? api.sessions.listSubagents(s.project, s.session_id, an, s.source)
           : Promise.resolve([]),
+        canInspectSessionProcesses(s) && !an
+          ? api.shell.listSessionProcesses(s.project_path, s.session_id, s.source).catch(() => [])
+          : Promise.resolve([]),
       ]);
       if (!isCurrentDetailRequest(request)) return;
+      sessionProcesses = processes;
+      selectedProcessPid = processes[0]?.pid ?? null;
       detail = {
         session: s,
         records: result.records,
@@ -470,6 +486,81 @@
       if (isCurrentDetailRequest(request)) error = String(e);
     } finally {
       finishDetailRequest(request);
+    }
+  }
+
+  function canInspectSessionProcesses(session: SessionSummary): boolean {
+    return ["codex", "claude", "opencode"].includes(session.source) && !session.archive_name;
+  }
+
+  function canStopSessionProcesses(session: SessionSummary): boolean {
+    return session.source === "codex" && !session.archive_name;
+  }
+
+  function selectedSessionProcess(): SessionProcessInfo | null {
+    return sessionProcesses.find((process) => process.pid === selectedProcessPid) ?? null;
+  }
+
+  function processRuntime(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ${minutes % 60}m`;
+    return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  }
+
+  function processMatchLabel(reason: string): string {
+    if (reason === "session-id") return t("sess.processMatchSession");
+    if (reason === "session-lock" || reason === "session-lock-command") return t("sess.processMatchLock");
+    return t("sess.processMatchProject");
+  }
+
+  async function openProcessDialog() {
+    if (!detail || !canInspectSessionProcesses(detail.session) || loadingProcesses || processActionBusy) return;
+    const session = detail.session;
+    loadingProcesses = true;
+    processError = "";
+    try {
+      const processes = await api.shell.listSessionProcesses(session.project_path, session.session_id, session.source);
+      if (!detail || sessionCacheKey(detail.session) !== sessionCacheKey(session)) return;
+      sessionProcesses = processes;
+      selectedProcessPid = processes[0]?.pid ?? null;
+      if (processes.length === 0) {
+        flashNotice(t("sess.processNone"));
+        return;
+      }
+      processDialogOpen = true;
+    } catch (e) {
+      processError = String(e);
+    } finally {
+      loadingProcesses = false;
+    }
+  }
+
+  async function stopSelectedProcess() {
+    if (!detail || processActionBusy) return;
+    const process = selectedSessionProcess();
+    if (!process || !canStopSessionProcesses(detail.session)) return;
+    const session = detail.session;
+    processActionBusy = true;
+    processError = "";
+    try {
+      await api.shell.stopSessionProcess(
+        process.pid,
+        process.started_at,
+        session.project_path,
+        session.session_id,
+        session.source,
+      );
+      processDialogOpen = false;
+      sessionProcesses = [];
+      selectedProcessPid = null;
+      flashNotice(t("sess.processClosed", { pid: process.pid }));
+    } catch (e) {
+      processError = String(e);
+    } finally {
+      processActionBusy = false;
     }
   }
 
@@ -617,6 +708,10 @@
     detailSearchTimer = null;
     searchingInSession = false;
     detail = null;
+    sessionProcesses = [];
+    selectedProcessPid = null;
+    processDialogOpen = false;
+    processError = "";
     detailSearch = "";
     searchHits = [];
     currentHitIdx = -1;
@@ -1672,6 +1767,16 @@ ${rows}
             {t("sess.sessionOf", { src: sourceLabel(detail.session) })}
           </span>
         {/if}
+        {#if canInspectSessionProcesses(detail.session) && sessionProcesses.length > 0}
+          <button
+            onclick={openProcessDialog}
+            disabled={loadingProcesses || processActionBusy}
+            title={t("sess.processFindTitle")}
+            class="px-3 py-1.5 text-[11px] border {canStopSessionProcesses(detail.session) ? 'border-danger/35 text-danger hover:bg-danger-dim' : 'border-border text-text-secondary hover:bg-bg-hover'} rounded-lg transition-colors disabled:opacity-50"
+          >
+            {loadingProcesses ? t("sess.processSearching") : canStopSessionProcesses(detail.session) ? t("sess.processClose") : t("sess.processInspect")}
+          </button>
+        {/if}
       </div>
     </div>
 
@@ -2079,3 +2184,51 @@ ${rows}
     </div>
   {/if}
 </div>
+
+{#if processDialogOpen}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    role="presentation"
+    onclick={(event) => { if (event.target === event.currentTarget && !processActionBusy) processDialogOpen = false; }}
+  >
+    <div class="w-full max-w-xl rounded-xl border border-border bg-bg-secondary p-5 shadow-2xl" role="dialog" aria-modal="true" aria-label={t("sess.processDialogTitle")}>
+      <h3 class="text-sm font-semibold text-text-primary">{t("sess.processDialogTitle")}</h3>
+      <p class="mt-2 text-xs leading-relaxed text-text-secondary">{t("sess.processDialogBody")}</p>
+      <div class="mt-4 max-h-64 space-y-2 overflow-y-auto">
+        {#each sessionProcesses as process}
+          <button
+            onclick={() => (selectedProcessPid = process.pid)}
+            class="w-full rounded-lg border p-3 text-left transition-colors {selectedProcessPid === process.pid ? 'border-danger/60 bg-danger-dim' : 'border-border hover:bg-bg-hover'}"
+          >
+            <div class="flex items-center justify-between gap-3 text-[11px]">
+              <span class="font-mono font-medium">PID {process.pid}</span>
+              <span class="text-text-muted">{process.process_count} {t("sess.processCount")} · {processRuntime(process.run_time_seconds)}</span>
+            </div>
+            <div class="mt-1 text-[10px] text-text-muted">{processMatchLabel(process.match_reason)}</div>
+            <div class="mt-1 truncate font-mono text-[10px] text-text-secondary" title={process.command}>{process.command}</div>
+            {#if process.cwd}
+              <div class="mt-1 truncate text-[10px] text-text-muted" title={process.cwd}>{process.cwd}</div>
+            {/if}
+          </button>
+        {/each}
+      </div>
+      {#if processError}
+        <div class="mt-3 rounded-lg border border-danger/30 bg-danger-dim p-2 text-xs text-danger">{processError}</div>
+      {/if}
+      <div class="mt-5 flex justify-end gap-2">
+        <button
+          onclick={() => (processDialogOpen = false)}
+          disabled={processActionBusy}
+          class="rounded-lg border border-border px-4 py-1.5 text-xs hover:bg-bg-hover disabled:opacity-50"
+        >{t("common.cancel")}</button>
+        {#if detail && canStopSessionProcesses(detail.session)}
+          <button
+            onclick={stopSelectedProcess}
+            disabled={selectedProcessPid === null || processActionBusy}
+            class="rounded-lg bg-danger px-4 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >{processActionBusy ? t("sess.processClosing") : t("sess.processCloseConfirm")}</button>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}

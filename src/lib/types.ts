@@ -102,6 +102,17 @@ export interface SessionSummary {
   model_contexts?: SessionModelInfo[];
 }
 
+export interface SessionProcessInfo {
+  pid: number;
+  parent_pid: number | null;
+  command: string;
+  cwd: string | null;
+  started_at: number;
+  run_time_seconds: number;
+  process_count: number;
+  match_reason: string;
+}
+
 export interface SessionSearchHit {
   byte_offset: number;
   snippet: string;
@@ -183,6 +194,20 @@ export interface UsageSummary {
   by_model: UsageBucket[];
   by_project: UsageBucket[];
   by_day: UsageBucket[];
+}
+
+export interface DiscoveredModelPrice {
+  model: string;
+  input: number | null;
+  output: number | null;
+  matched_model: string | null;
+}
+
+export interface ModelPriceRefreshResult {
+  models: DiscoveredModelPrice[];
+  source: string;
+  used_fallback: boolean;
+  error: string | null;
 }
 
 export interface DashboardSourceStat {

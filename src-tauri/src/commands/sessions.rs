@@ -2,8 +2,160 @@ use crate::agents::{AgentProvider, ProviderRegistry, SourceInfo};
 use crate::error::AppError;
 use crate::models::session::{PaginatedRecords, SessionSearchHit, SessionSummary, SubagentInfo};
 use crate::services::search::{DashboardSummary, IndexStatus, SharedSearchEngine, UsageSummary};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tauri::State;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveredModelPrice {
+    pub model: String,
+    pub input: Option<f64>,
+    pub output: Option<f64>,
+    pub matched_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelPriceRefreshResult {
+    pub models: Vec<DiscoveredModelPrice>,
+    pub source: String,
+    pub used_fallback: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModelsResponse {
+    #[serde(default)]
+    data: Vec<OpenRouterModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModel {
+    id: String,
+    #[serde(default)]
+    canonical_slug: Option<String>,
+    #[serde(default)]
+    pricing: OpenRouterPricing,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OpenRouterPricing {
+    #[serde(default)]
+    prompt: serde_json::Value,
+    #[serde(default)]
+    completion: serde_json::Value,
+}
+
+fn price_per_million(value: &serde_json::Value) -> Option<f64> {
+    let value = match value {
+        serde_json::Value::String(value) => value.parse::<f64>().ok()?,
+        serde_json::Value::Number(value) => value.as_f64()?,
+        _ => return None,
+    };
+    (value.is_finite() && value >= 0.0).then_some(value * 1_000_000.0)
+}
+
+fn normalized_model_id(model: &str) -> String {
+    let model = model.trim().to_ascii_lowercase();
+    let model = model.strip_prefix('~').unwrap_or(&model);
+    let model = model.split(':').next().unwrap_or(model);
+    model.rsplit('/').next().unwrap_or(model).replace('.', "-")
+}
+
+fn catalog_price_for<'a>(
+    model: &str,
+    catalog: &'a HashMap<String, (&'a str, &'a OpenRouterPricing)>,
+) -> Option<(String, &'a OpenRouterPricing)> {
+    let normalized = normalized_model_id(model);
+    catalog
+        .get(&normalized)
+        .map(|(matched, pricing)| ((*matched).to_string(), *pricing))
+}
+
+/// A small offline safety net, intentionally consulted only when the live catalog is unavailable.
+/// Values are USD per one million tokens and use exact normalized ids to avoid guessing prices for
+/// provider-specific aliases.
+const FALLBACK_MODEL_PRICES: &[(&str, f64, f64)] = &[
+    ("claude-fable-5", 10.0, 50.0),
+    ("claude-haiku-4-5", 1.0, 5.0),
+    ("claude-opus-4-6", 5.0, 25.0),
+    ("claude-opus-4-7", 5.0, 25.0),
+    ("claude-opus-4-8", 5.0, 25.0),
+    ("claude-sonnet-4-6", 3.0, 15.0),
+    ("gpt-5-4", 2.5, 15.0),
+    ("gpt-5-4-mini", 0.75, 4.5),
+    ("gpt-5-4-pro", 30.0, 180.0),
+    ("gpt-5-5", 5.0, 30.0),
+    ("gpt-5-6-luna", 0.1, 0.6),
+    ("gpt-5-6-sol", 5.0, 30.0),
+    ("gpt-5-6-terra", 1.0, 6.0),
+];
+
+fn fallback_model_price(model: &str) -> Option<DiscoveredModelPrice> {
+    let normalized = normalized_model_id(model);
+    FALLBACK_MODEL_PRICES
+        .iter()
+        .find(|(candidate, _, _)| *candidate == normalized)
+        .map(|(matched, input, output)| DiscoveredModelPrice {
+            model: model.to_string(),
+            input: Some(*input),
+            output: Some(*output),
+            matched_model: Some((*matched).to_string()),
+        })
+}
+
+fn fallback_models_for(mut models: Vec<String>) -> Vec<DiscoveredModelPrice> {
+    models.sort_by_key(|model| model.to_ascii_lowercase());
+    models.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    let mut seen: HashSet<String> = models
+        .iter()
+        .map(|model| normalized_model_id(model))
+        .collect();
+    let mut result: Vec<DiscoveredModelPrice> = models
+        .into_iter()
+        .map(|model| {
+            fallback_model_price(&model).unwrap_or(DiscoveredModelPrice {
+                model,
+                input: None,
+                output: None,
+                matched_model: None,
+            })
+        })
+        .collect();
+    for (model, input, output) in FALLBACK_MODEL_PRICES {
+        if seen.insert((*model).to_string()) {
+            result.push(DiscoveredModelPrice {
+                model: (*model).to_string(),
+                input: Some(*input),
+                output: Some(*output),
+                matched_model: Some((*model).to_string()),
+            });
+        }
+    }
+    result.sort_by_key(|model| model.model.to_ascii_lowercase());
+    result
+}
+
+async fn fetch_openrouter_catalog() -> Result<Vec<OpenRouterModel>, String> {
+    let response = reqwest::Client::builder()
+        .user_agent("code-dejavu")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|error| error.to_string())?
+        .get("https://openrouter.ai/api/v1/models")
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?
+        .json::<OpenRouterModelsResponse>()
+        .await
+        .map_err(|error| error.to_string())?;
+    if response.data.is_empty() {
+        return Err("OpenRouter returned an empty model catalog".to_string());
+    }
+    Ok(response.data)
+}
 
 #[derive(Clone, Copy)]
 enum SessionCapability {
@@ -123,6 +275,82 @@ pub async fn usage_summary(
     })
     .await
     .map_err(|e| AppError::Archive(e.to_string()))?
+}
+
+/// Discover model ids used by local sessions and resolve their current public prices. The local
+/// index remains the source of truth for which models are shown; the remote catalog only fills
+/// pricing when it exposes an exact normalized model-id match.
+#[tauri::command]
+pub async fn refresh_model_prices(
+    engine: State<'_, SharedSearchEngine>,
+) -> Result<ModelPriceRefreshResult, AppError> {
+    let engine = engine.inner().clone();
+    let mut models = tauri::async_runtime::spawn_blocking(move || {
+        let guard = engine
+            .read()
+            .map_err(|e| AppError::Archive(e.to_string()))?;
+        Ok::<Vec<String>, AppError>(guard.discovered_models())
+    })
+    .await
+    .map_err(|e| AppError::Archive(e.to_string()))??;
+    models.sort_by_key(|model| model.to_ascii_lowercase());
+    models.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+
+    let catalog = match fetch_openrouter_catalog().await {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return Ok(ModelPriceRefreshResult {
+                models: fallback_models_for(models),
+                source: "Built-in fallback prices".to_string(),
+                used_fallback: true,
+                error: Some(error),
+            });
+        }
+    };
+    let mut entries: HashMap<String, (&str, &OpenRouterPricing)> = HashMap::new();
+    for entry in &catalog {
+        // Variant prices (for example `:batch`) must not silently replace the standard model.
+        if entry.id.contains(':') {
+            continue;
+        }
+        let candidates = [Some(entry.id.as_str()), entry.canonical_slug.as_deref()];
+        for candidate in candidates.into_iter().flatten() {
+            entries
+                .entry(normalized_model_id(candidate))
+                .and_modify(|current| {
+                    if current.0.starts_with('~') && !entry.id.starts_with('~') {
+                        *current = (entry.id.as_str(), &entry.pricing);
+                    }
+                })
+                .or_insert((entry.id.as_str(), &entry.pricing));
+        }
+    }
+    let models = models
+        .into_iter()
+        .map(|model| {
+            let Some((matched_model, pricing)) = catalog_price_for(&model, &entries) else {
+                return DiscoveredModelPrice {
+                    model,
+                    input: None,
+                    output: None,
+                    matched_model: None,
+                };
+            };
+            DiscoveredModelPrice {
+                model,
+                input: price_per_million(&pricing.prompt),
+                output: price_per_million(&pricing.completion),
+                matched_model: Some(matched_model),
+            }
+        })
+        .collect();
+
+    Ok(ModelPriceRefreshResult {
+        models,
+        source: "OpenRouter model catalog".to_string(),
+        used_fallback: false,
+        error: None,
+    })
 }
 
 /// Pre-aggregated dashboard view served entirely from the in-memory index (no disk scan), so the
@@ -456,4 +684,35 @@ pub async fn search_in_session(
     })
     .await
     .map_err(|e| AppError::Archive(e.to_string()))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fallback_model_price, fallback_models_for, normalized_model_id};
+
+    #[test]
+    fn model_id_normalization_handles_provider_and_version_separators() {
+        assert_eq!(
+            normalized_model_id("anthropic/claude-fable-5"),
+            "claude-fable-5"
+        );
+        assert_eq!(normalized_model_id("openai/gpt-5.4"), "gpt-5-4");
+        assert_eq!(
+            normalized_model_id("anthropic/claude-fable-5:batch"),
+            "claude-fable-5"
+        );
+    }
+
+    #[test]
+    fn fallback_prices_include_fable_five() {
+        let price = fallback_model_price("claude-fable-5").expect("fallback price");
+        assert_eq!(price.input, Some(10.0));
+        assert_eq!(price.output, Some(50.0));
+    }
+
+    #[test]
+    fn fallback_catalog_is_available_without_a_local_fable_session() {
+        let models = fallback_models_for(Vec::new());
+        assert!(models.iter().any(|model| model.model == "claude-fable-5"));
+    }
 }

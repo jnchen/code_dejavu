@@ -6,8 +6,8 @@
   import { t } from "$lib/i18n.svelte";
   import { deferRouteLoad } from "$lib/defer";
   import Markdown from "$lib/Markdown.svelte";
-  import { DEFAULT_PRICES } from "$lib/prices";
-  import type { DejavuConfig, InstructionArtifact, InstructionDetail, SourceInfo } from "$lib/types";
+  import { DEFAULT_PRICES, priceForIn, priceRowMatchesModel } from "$lib/prices";
+  import type { DejavuConfig, DiscoveredModelPrice, InstructionArtifact, InstructionDetail, SourceInfo } from "$lib/types";
   import packageInfo from "../../../package.json";
   import changelog from "../../../CHANGELOG.md?raw";
 
@@ -18,6 +18,7 @@
   let configDetail = $state<InstructionDetail | null>(null);
   let configContent = $state("");
   let loading = $state(true);
+  let isWindows = $state(false);
   let loadingConfig = $state(false);
   let saving = $state(false);
   let savingConfig = $state(false);
@@ -55,6 +56,10 @@
 
   // Usage price table — stored in the app config (DejavuConfig.prices), edited here.
   let pricesSaved = $state(false);
+  let refreshingPrices = $state(false);
+  let discoveredModelPrices = $state<DiscoveredModelPrice[]>([]);
+  let priceRefreshMessage = $state("");
+  let priceRefreshError = $state("");
 
   function addPriceRow() {
     if (!dejavuConfig) return;
@@ -76,6 +81,74 @@
   function resetPricesToDefault() {
     if (!dejavuConfig) return;
     dejavuConfig.prices = DEFAULT_PRICES.map((r) => ({ ...r }));
+  }
+
+  function hasConfiguredPrice(model: string): boolean {
+    return priceForIn(dejavuConfig?.prices, model) !== null;
+  }
+
+  function formatPrice(value: number | null): string {
+    if (value == null) return t("set.priceUnknown");
+    return `$${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2)}`;
+  }
+
+  function isUnmodifiedDefaultPrice(row: DejavuConfig["prices"][number]): boolean {
+    return DEFAULT_PRICES.some((fallback) =>
+      fallback.match.toLowerCase() === row.match.trim().toLowerCase()
+      && fallback.input === Number(row.input)
+      && fallback.output === Number(row.output)
+    );
+  }
+
+  function hasCustomPriceFor(model: string, prices: DejavuConfig["prices"]): boolean {
+    return prices.some((row) => priceRowMatchesModel(row, model) && !isUnmodifiedDefaultPrice(row));
+  }
+
+  function hasSamePriceFor(model: string, input: number, output: number, prices: DejavuConfig["prices"]): boolean {
+    return prices.some((row) =>
+      priceRowMatchesModel(row, model) && Number(row.input) === input && Number(row.output) === output
+    );
+  }
+
+  async function refreshModelPrices() {
+    if (!dejavuConfig) return;
+    refreshingPrices = true;
+    priceRefreshMessage = "";
+    priceRefreshError = "";
+    try {
+      const result = await api.sessions.refreshModelPrices();
+      discoveredModelPrices = result.models;
+      const prices = [...(dejavuConfig.prices ?? [])];
+      let added = 0;
+      for (const model of result.models) {
+        if (
+          model.input == null
+          || model.output == null
+          || hasCustomPriceFor(model.model, prices)
+          || hasSamePriceFor(model.model, model.input, model.output, prices)
+        ) continue;
+        prices.push({ match: model.model, input: model.input, output: model.output });
+        added++;
+      }
+      if (added > 0) {
+        dejavuConfig.prices = prices;
+        await api.dejavu.saveConfig(dejavuConfig);
+      }
+      priceRefreshMessage = t("set.priceRefreshResult", { models: result.models.length, prices: added });
+      if (result.error) {
+        priceRefreshError = result.used_fallback
+          ? t("set.priceFallbackUsed")
+          : t("set.priceCatalogFailed", { error: result.error });
+      }
+      if (added > 0) {
+        pricesSaved = true;
+        setTimeout(() => (pricesSaved = false), 2000);
+      }
+    } catch (e) {
+      priceRefreshError = String(e);
+    } finally {
+      refreshingPrices = false;
+    }
   }
 
   const argPresets: Record<string, string[]> = {
@@ -314,6 +387,10 @@
   }
 
   onMount(() => {
+    // WSL is a Windows-only subsystem. Keep the persisted fields for cross-version config
+    // compatibility, but do not expose an unusable control on macOS/Linux.
+    const platform = [navigator.platform, navigator.userAgent].join(" ").toLowerCase();
+    isWindows = platform.includes("win");
     deferRouteLoad(refresh);
   });
 </script>
@@ -416,53 +493,55 @@
             </div>
           </div>
 
-          <div class="rounded-xl border border-border bg-bg-secondary p-4">
-            <h3 class="mb-3 text-sm font-medium">{t("set.wsl")}</h3>
-            <label class="flex items-start gap-2.5">
-              <input type="checkbox" bind:checked={dejavuConfig.wsl_scan} class="mt-0.5 accent-accent" />
-              <span>
-                <span class="block text-xs">{t("set.wslScan")}</span>
-                <span class="mt-1 block text-[10px] leading-relaxed text-text-muted">{t("set.wslScanHint")}</span>
-              </span>
-            </label>
+          {#if isWindows}
+            <div class="rounded-xl border border-border bg-bg-secondary p-4">
+              <h3 class="mb-3 text-sm font-medium">{t("set.wsl")}</h3>
+              <label class="flex items-start gap-2.5">
+                <input type="checkbox" bind:checked={dejavuConfig.wsl_scan} class="mt-0.5 accent-accent" />
+                <span>
+                  <span class="block text-xs">{t("set.wslScan")}</span>
+                  <span class="mt-1 block text-[10px] leading-relaxed text-text-muted">{t("set.wslScanHint")}</span>
+                </span>
+              </label>
 
-            {#if dejavuConfig.wsl_scan}
-              <div class="mt-3 border-t border-border-subtle pt-3">
-                <div class="mb-2 text-[10px] text-text-secondary">{t("set.wslConnected")}</div>
-                {#if connectedHosts.length > 0}
-                  <div class="flex flex-wrap gap-1.5">
-                    {#each connectedHosts as host}
-                      <span class="rounded-lg bg-accent-dim px-2.5 py-1 font-mono text-[11px] text-accent">{host}</span>
-                    {/each}
-                  </div>
-                {:else}
-                  <p class="text-[11px] text-text-muted">{t("set.wslNone")}</p>
-                {/if}
-              </div>
-
-              <div class="mt-3 border-t border-border-subtle pt-3">
-                <div class="mb-2 text-[10px] text-text-secondary">{t("set.wslExcluded")}</div>
-                {#if dejavuConfig.wsl_excluded.length > 0}
-                  <div class="mb-2 flex flex-wrap gap-1.5">
-                    {#each dejavuConfig.wsl_excluded as distro}
-                      <span class="flex items-center gap-1.5 rounded-lg bg-bg-tertiary px-2.5 py-1 font-mono text-[11px]">
-                        {distro}
-                        <button onclick={() => removeExcludedDistro(distro)} class="text-[10px] text-danger hover:text-danger-hover">x</button>
-                      </span>
-                    {/each}
-                  </div>
-                {/if}
-                <div class="flex gap-1">
-                  <input
-                    bind:value={newExcludedDistro}
-                    placeholder={t("set.wslExcludePlaceholder")}
-                    class="w-48 rounded-lg border border-border bg-bg px-2 py-1 font-mono text-[10px] outline-none focus:border-accent"
-                  />
-                  <button onclick={addExcludedDistro} class="rounded-lg border border-border px-2 py-1 text-[10px] hover:bg-bg-hover">{t("common.add")}</button>
+              {#if dejavuConfig.wsl_scan}
+                <div class="mt-3 border-t border-border-subtle pt-3">
+                  <div class="mb-2 text-[10px] text-text-secondary">{t("set.wslConnected")}</div>
+                  {#if connectedHosts.length > 0}
+                    <div class="flex flex-wrap gap-1.5">
+                      {#each connectedHosts as host}
+                        <span class="rounded-lg bg-accent-dim px-2.5 py-1 font-mono text-[11px] text-accent">{host}</span>
+                      {/each}
+                    </div>
+                  {:else}
+                    <p class="text-[11px] text-text-muted">{t("set.wslNone")}</p>
+                  {/if}
                 </div>
-              </div>
-            {/if}
-          </div>
+
+                <div class="mt-3 border-t border-border-subtle pt-3">
+                  <div class="mb-2 text-[10px] text-text-secondary">{t("set.wslExcluded")}</div>
+                  {#if dejavuConfig.wsl_excluded.length > 0}
+                    <div class="mb-2 flex flex-wrap gap-1.5">
+                      {#each dejavuConfig.wsl_excluded as distro}
+                        <span class="flex items-center gap-1.5 rounded-lg bg-bg-tertiary px-2.5 py-1 font-mono text-[11px]">
+                          {distro}
+                          <button onclick={() => removeExcludedDistro(distro)} class="text-[10px] text-danger hover:text-danger-hover">x</button>
+                        </span>
+                      {/each}
+                    </div>
+                  {/if}
+                  <div class="flex gap-1">
+                    <input
+                      bind:value={newExcludedDistro}
+                      placeholder={t("set.wslExcludePlaceholder")}
+                      class="w-48 rounded-lg border border-border bg-bg px-2 py-1 font-mono text-[10px] outline-none focus:border-accent"
+                    />
+                    <button onclick={addExcludedDistro} class="rounded-lg border border-border px-2 py-1 text-[10px] hover:bg-bg-hover">{t("common.add")}</button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/if}
 
           <div class="rounded-xl border border-border bg-bg-secondary p-4">
             <h3 class="mb-3 text-sm font-medium">{t("set.resumeArgs")}</h3>
@@ -559,48 +638,85 @@
           <p class="mt-1 text-xs text-text-muted">{t("set.pricesSub")}</p>
         </div>
         <div class="flex shrink-0 items-center gap-2">
+          <button
+            onclick={refreshModelPrices}
+            disabled={refreshingPrices}
+            class="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-bg-hover disabled:opacity-50"
+          >
+            {refreshingPrices ? t("set.priceRefreshing") : t("set.priceRefresh")}
+          </button>
           <button onclick={resetPricesToDefault} class="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-bg-hover">{t("set.priceReset")}</button>
           <button onclick={savePrices} class="rounded-lg bg-accent px-3 py-1.5 text-xs text-white hover:bg-accent-hover">{pricesSaved ? t("common.saved") : t("common.save")}</button>
         </div>
       </div>
 
       <div class="rounded-xl border border-border bg-bg-secondary p-4">
-        <div class="mb-2 grid grid-cols-[1fr_6.5rem_6.5rem_2rem] gap-2 text-[10px] uppercase tracking-wider text-text-muted">
-          <span>{t("set.priceMatch")}</span>
-          <span class="text-right">{t("set.priceInput")}</span>
-          <span class="text-right">{t("set.priceOutput")}</span>
-          <span></span>
-        </div>
-        {#if (dejavuConfig?.prices?.length ?? 0) === 0}
-          <p class="py-2 text-xs text-text-secondary">{t("set.pricesEmpty")}</p>
-        {/if}
-        <div class="space-y-1.5">
-          {#each dejavuConfig?.prices ?? [] as row, i (i)}
-            <div class="grid grid-cols-[1fr_6.5rem_6.5rem_2rem] items-center gap-2">
-              <input
-                bind:value={row.match}
-                placeholder={t("set.priceMatchPlaceholder")}
-                class="rounded-lg border border-border bg-bg px-2.5 py-1.5 font-mono text-xs outline-none focus:border-accent"
-              />
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                bind:value={row.input}
-                class="rounded-lg border border-border bg-bg px-2.5 py-1.5 text-right font-mono text-xs outline-none focus:border-accent"
-              />
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                bind:value={row.output}
-                class="rounded-lg border border-border bg-bg px-2.5 py-1.5 text-right font-mono text-xs outline-none focus:border-accent"
-              />
-              <button onclick={() => removePriceRow(i)} class="rounded px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger-dim" title={t("common.delete")} aria-label={t("common.delete")}>x</button>
+        <div class="overflow-x-auto">
+          <div class="min-w-[34rem]">
+            <div class="mb-2 grid grid-cols-[1fr_6.5rem_6.5rem_2rem] gap-2 text-[10px] uppercase tracking-wider text-text-muted">
+              <span>{t("set.priceMatch")}</span>
+              <span class="text-right">{t("set.priceInput")}</span>
+              <span class="text-right">{t("set.priceOutput")}</span>
+              <span></span>
             </div>
-          {/each}
+            {#if (dejavuConfig?.prices?.length ?? 0) === 0}
+              <p class="py-2 text-xs text-text-secondary">{t("set.pricesEmpty")}</p>
+            {/if}
+            <div class="space-y-1.5">
+              {#each dejavuConfig?.prices ?? [] as row, i (i)}
+                <div class="grid grid-cols-[1fr_6.5rem_6.5rem_2rem] items-center gap-2">
+                  <input
+                    bind:value={row.match}
+                    placeholder={t("set.priceMatchPlaceholder")}
+                    class="rounded-lg border border-border bg-bg px-2.5 py-1.5 font-mono text-xs outline-none focus:border-accent"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    bind:value={row.input}
+                    class="rounded-lg border border-border bg-bg px-2.5 py-1.5 text-right font-mono text-xs outline-none focus:border-accent"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    bind:value={row.output}
+                    class="rounded-lg border border-border bg-bg px-2.5 py-1.5 text-right font-mono text-xs outline-none focus:border-accent"
+                  />
+                  <button onclick={() => removePriceRow(i)} class="rounded px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger-dim" title={t("common.delete")} aria-label={t("common.delete")}>x</button>
+                </div>
+              {/each}
+            </div>
+          </div>
         </div>
         <button onclick={addPriceRow} class="mt-3 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-bg-hover">{t("set.priceAdd")}</button>
+
+        {#if priceRefreshMessage || priceRefreshError}
+          <div class="mt-3 border-t border-border-subtle pt-3 text-[11px]">
+            {#if priceRefreshMessage}<p class="text-text-secondary">{priceRefreshMessage}</p>{/if}
+            {#if priceRefreshError}<p class="mt-1 break-words text-warning">{priceRefreshError}</p>{/if}
+          </div>
+        {/if}
+
+        {#if discoveredModelPrices.length > 0}
+          <div class="mt-3 border-t border-border-subtle pt-3">
+            <div class="mb-2 text-[10px] uppercase tracking-wider text-text-muted">{t("set.priceDiscovered")}</div>
+            <div class="divide-y divide-border-subtle">
+              {#each discoveredModelPrices as model}
+                <div class="flex min-w-0 items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
+                  <span class="min-w-0 truncate font-mono text-[11px]" title={model.matched_model ?? model.model}>{model.model}</span>
+                  <div class="flex shrink-0 items-center gap-2 text-[10px]">
+                    <span class="text-text-muted">{formatPrice(model.input)} / {formatPrice(model.output)}</span>
+                    <span class="rounded-md px-1.5 py-0.5 {hasConfiguredPrice(model.model) ? 'bg-success-dim text-success' : 'bg-warning-dim text-warning'}">
+                      {hasConfiguredPrice(model.model) ? t("set.priceConfigured") : t("set.priceUnconfigured")}
+                    </span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
     </section>
 
