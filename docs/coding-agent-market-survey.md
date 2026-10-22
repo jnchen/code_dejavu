@@ -97,17 +97,20 @@ Product implication:
 
 ### OpenCode
 
-OpenCode is implemented in this repo as a session provider. The provider reads
-`~/.local/share/opencode/opencode.db`, builds sessions from SQLite `session`, `message`, and `part`
-tables, contributes search documents, discovers instruction/config files, and maps child sessions
-to subagents.
+OpenCode is implemented in this repo as a session provider. The provider reads the v1
+`~/.local/share/opencode/opencode.db` layout (`session`, `message`, `part`) and the OpenCode 2
+layout (`session_v2`, `session_message`) from the same database. It builds sessions from both,
+contributes search documents, discovers instruction/config files, and maps child sessions to
+subagents. Upgraded installs retain any v1 session that the v2 migration did not copy; sessions
+present in both layouts are de-duplicated in favour of v2.
 
 OpenCode docs show terminal-first usage, share/undo flows, config, commands, and customization.
 
 Product implication:
 
 - Keep SQLite session reading as read-only.
-- Treat child sessions as `sessions.subagents`.
+- Keep v1 support: users are not required to upgrade to OpenCode 2.
+- Treat child sessions as `sessions.subagents`; v2 also supports nested subagents.
 - Keep OpenCode config/instruction surfaces read-only until write semantics are verified.
 
 ### PiAgent

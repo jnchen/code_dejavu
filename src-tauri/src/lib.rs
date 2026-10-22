@@ -42,7 +42,13 @@ pub fn run() {
     // reading a distro's share boots it.
     spawn_wsl_discovery(multi_hosts, providers, search_engine.clone());
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Native E2E only. The plugin opens an embedded WebDriver HTTP server, so it must never be
+    // part of a production build.
+    #[cfg(feature = "e2e")]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

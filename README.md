@@ -11,7 +11,7 @@ Claude Code、Codex CLI、OpenCode 与 PiAgent 留在本机的会话、指令和
 
 ## 功能
 
-- 统一浏览多种 coding agent 的会话和子代理记录
+- 统一浏览多种 coding agent 的会话和子代理记录（含 Claude Code、Codex CLI、OpenCode v1/v2、PiAgent）
 - 本地索引、全文检索、会话内搜索与用量统计
 - 查看和编辑项目指令、记忆、规则与工具定义
 - 创建、恢复和管理配置快照
@@ -44,8 +44,17 @@ pnpm tauri dev
 ```powershell
 pnpm check
 pnpm build
+pnpm test:e2e
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+原生 Tauri E2E（真实 WebView + 隔离夹具，不会读取真实会话）：
+
+```powershell
+pnpm test:e2e:native:build
+```
+
+测试隔离与两种 E2E 的说明见 [`docs/E2E_TESTING.md`](docs/E2E_TESTING.md)。
 
 正式构建：
 

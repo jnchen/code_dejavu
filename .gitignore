@@ -19,6 +19,12 @@ vite.config.ts.timestamp-*
 # Build/dev logs (tauri-dev.log, tauri-build.log, etc.)
 *.log
 
+# E2E artifacts and disposable fixture homes
+/.tmp-e2e
+/playwright-report
+/test-results
+/blob-report
+
 # Local signing material and packaged artifacts
 *.sig
 *.key

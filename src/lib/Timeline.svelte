@@ -129,7 +129,7 @@
     }
     return m;
   }
-  const isAgentCall = (r: SessionRecord) => r.tool_name === "Agent" || r.tool_name === "spawn_agent";
+  const isAgentCall = (r: SessionRecord) => r.tool_name === "Agent" || r.tool_name === "subagent" || r.tool_name === "spawn_agent";
   // Parallel batches: consecutive tool calls from one model turn (group_id), laid out
   // horizontally. Each call card is self-contained (input → Pre → result → Post).
   // Keyed by the record OBJECT (not byte_offset) — a lead-in text record and the tool record

@@ -1166,10 +1166,17 @@ pub fn list_claude_subagents(session_dir: &Path) -> Result<Vec<SubagentInfo>, Ap
 
                     agents.push(SubagentInfo {
                         agent_id,
-                        agent_type: meta.agent_type,
+                        agent_type: if meta.agent_type.trim().is_empty() {
+                            "subagent".to_string()
+                        } else {
+                            meta.agent_type
+                        },
                         description: meta.description,
                         tool_use_id: meta.tool_use_id,
                         record_count,
+                        parent_agent_id: meta
+                            .parent_agent_id
+                            .filter(|parent| !parent.trim().is_empty()),
                     });
                 }
             }

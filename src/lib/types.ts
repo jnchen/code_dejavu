@@ -348,6 +348,8 @@ export interface SubagentInfo {
   description: string;
   tool_use_id: string;
   record_count: number;
+  /** Parent agent for nested subagents; absent for direct children. */
+  parent_agent_id?: string;
 }
 
 export interface PriceRow {

@@ -2,6 +2,28 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)，从 `0.2.0` 开始在此记录面向用户的变化。
 
+## 未发布
+
+### 新增
+
+- OpenCode 同时支持 v1 与 v2 两种本地存储：v1 的 `session`/`message`/`part` 和 v2 的
+  `session_v2`/`session_message` 都会读取。升级到 v2 后仍保留在 v1 表中、未被迁移的旧会话
+  也会继续显示，两个版本都有的会话按 ID 去重并以 v2 为准。
+- OpenCode v2 的会话、消息、工具调用、子代理、搜索、用量和归档均可正常解析，包括新的
+  `subagent` 工具和嵌套子代理。
+- Claude Code 子代理元数据兼容可选字段和 `parentAgentId`：缺少 `description`/`toolUseId`
+  的子代理不再被跳过；嵌套子代理仍可在父会话的 Agent 卡片中逐层展开。
+
+### 改进
+
+- OpenCode v2 的 `read`/`write`/`edit` 参数、`shell` 工具和工具结果统一映射到现有的文件与
+  终端卡片。
+- 未安装 OpenCode v2 的用户不受影响：纯 v1 数据库仍走原有解析路径。
+- 新增两层 E2E 测试：Playwright 前端测试使用内存 IPC 夹具，覆盖会话、全部主页面、
+  快照/记忆/规则/指令/设置等写流程；原生 Tauri WebDriver 测试使用一次性 home 和夹具数据，
+  覆盖 Claude、Codex、OpenCode v1/v2、Pi 的真实解析链路。二者都不会读取或修改真实 agent
+  记录。详见 [`docs/E2E_TESTING.md`](docs/E2E_TESTING.md)。
+
 ## 0.4.0 - 2026-08-13
 
 ### 新增

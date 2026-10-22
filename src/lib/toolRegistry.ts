@@ -50,6 +50,7 @@ const REGISTRY: Record<string, ToolMeta> = {
   // OpenCode tools (lowercase). bash is Terminal-compatible (input.command + output text);
   // the rest use the Generic body (input params + output) until they earn dedicated renderers.
   bash: t("tool.label.terminal", "💻", Terminal),
+  shell: t("tool.label.terminal", "💻", Terminal),
   interactive_bash: t("tool.label.interactiveBash", "💻", Terminal),
   background_output: t("tool.label.bgOutput", "💻", Terminal),
   read: t("tool.label.read", "📖", FileRead),
@@ -62,6 +63,8 @@ const REGISTRY: Record<string, ToolMeta> = {
   websearch: t("tool.label.websearch", "🔍", WebSearch),
   todowrite: t("tool.label.todo", "✅", TodoWrite),
   task: t("tool.label.subagent", "🤖"),
+  // OpenCode 2 renamed the child-session tool to `subagent`.
+  subagent: t("tool.label.subagent", "🤖"),
   question: t("tool.label.askUser", "❓", AskUserQuestion),
   patch: t("tool.label.patch", "🩹"),
   skill: t("tool.label.skill", "⚡"),

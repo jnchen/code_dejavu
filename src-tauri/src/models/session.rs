@@ -211,20 +211,42 @@ pub struct SubagentInfo {
     pub description: String,
     pub tool_use_id: String,
     pub record_count: u32,
+    /// Parent agent ID for nested subagents (spawned by another subagent). None for direct
+    /// children of the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_agent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SubagentMeta {
-    #[serde(rename = "agentType")]
+    /// Current Claude Code metadata. `toolUseId` / `description` are absent on some nested or
+    /// programmatically spawned agents, so they must not make the whole transcript disappear.
+    #[serde(rename = "agentType", default)]
     pub agent_type: String,
+    #[serde(default)]
     pub description: String,
-    #[serde(rename = "toolUseId")]
+    #[serde(rename = "toolUseId", default)]
     pub tool_use_id: String,
+    /// Set on nested agents (spawned by another subagent) to the parent agent's ID.
+    #[serde(rename = "parentAgentId", default)]
+    pub parent_agent_id: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_terminal_formatting, PaginatedRecords, SessionRecord};
+    use super::{strip_terminal_formatting, PaginatedRecords, SessionRecord, SubagentMeta};
+
+    #[test]
+    fn subagent_meta_tolerates_optional_fields_and_nested_parent() {
+        let meta: SubagentMeta = serde_json::from_str(
+            r#"{"agentType":"general-purpose","spawnDepth":2,"parentAgentId":"root-agent"}"#,
+        )
+        .expect("metadata");
+        assert_eq!(meta.agent_type, "general-purpose");
+        assert!(meta.description.is_empty());
+        assert!(meta.tool_use_id.is_empty());
+        assert_eq!(meta.parent_agent_id.as_deref(), Some("root-agent"));
+    }
 
     #[test]
     fn strips_ansi_tables_and_osc_links_without_losing_text() {

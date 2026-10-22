@@ -1681,6 +1681,11 @@ impl AgentProvider for CodexProvider {
                 // The current UI loads until EOF and does not display this estimate. Avoid a
                 // second full pass over every forked rollout just to count raw JSONL lines.
                 record_count: 0,
+                parent_agent_id: child
+                    .meta
+                    .parent_thread_id
+                    .clone()
+                    .filter(|parent| parent != session_id),
             });
         }
         Ok(out)
