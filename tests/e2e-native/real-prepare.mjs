@@ -128,9 +128,45 @@ function newestClaudeFile() {
 let sampleToken = "the";
 const newest = newestClaudeFile();
 if (newest) {
-  const text = readFileSync(newest, "utf8").slice(0, 2_000_000);
-  const match = text.match(/\b[A-Za-z][A-Za-z0-9_-]{3,15}\b/g);
-  if (match) sampleToken = match.find((word) => !["type", "message", "assistant", "content", "timestamp", "sessionId", "parentUuid", "isSidechain"].includes(word)) ?? sampleToken;
+  const lines = readFileSync(newest, "utf8").split("\n");
+  const ignore = new Set([
+    "type",
+    "message",
+    "assistant",
+    "content",
+    "timestamp",
+    "sessionId",
+    "parentUuid",
+    "isSidechain",
+    "queue-operation",
+    "attachment",
+    "system-reminder",
+  ]);
+  outer: for (const line of lines) {
+    if (!line.trim()) continue;
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const content = value?.message?.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content
+              .map((part) => (typeof part?.text === "string" ? part.text : ""))
+              .join("\n")
+          : "";
+    const match = text.match(/\b[A-Za-z][A-Za-z0-9_-]{3,15}\b/g);
+    for (const word of match ?? []) {
+      if (!ignore.has(word.toLowerCase())) {
+        sampleToken = word;
+        break outer;
+      }
+    }
+  }
 }
 
 const manifest = {

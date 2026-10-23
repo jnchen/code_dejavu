@@ -24,6 +24,8 @@
   多级子代理；原生 Tauri WebDriver 测试使用一次性 home 和夹具数据，覆盖 Claude、Codex、
   OpenCode v1/v2、Pi 的真实解析链路与两级子代理。二者都不会读取或修改真实 agent
   记录。详见 [`docs/E2E_TESTING.md`](docs/E2E_TESTING.md)。
+- 新增真实数据只读核心测试：复制本机会话到一次性 home 后运行，验证索引、四类来源、
+  会话打开与真实搜索，原始数据保持只读；测试前后校验 mtime。
 
 ### 修复
 

@@ -79,6 +79,25 @@ pnpm test:e2e:native
 
 同时写入 `wsl_scan: false`，避免扫描真实 WSL 发行版。测试结束后删除整个夹具目录。
 
+## 3. 真实数据只读核心测试（可选）
+
+用你的真实数据验证索引、四类来源、打开会话和搜索，但应用只读取一份副本：
+
+```powershell
+pnpm test:e2e:real:prepare   # 复制真实数据到 .tmp-real-e2e（OpenCode DB 用 SQLite 在线备份）
+pnpm test:e2e:real           # 启动隔离应用并断言
+```
+
+- 真实目录只读，`USERPROFILE` / `APPDATA` / `LOCALAPPDATA` / XDG 全部指向副本
+- 不复制 `auth.json` / `credentials.json` 等敏感文件
+- `wsl_scan: false`
+- 测试前后比较真实目录的 mtime；正常应为 unchanged
+- 只做只读操作，不执行删除、恢复、停止进程等写操作
+- 结束后删除副本，回收磁盘
+
+已验证：真实索引 547 个会话，Claude 47、Codex 329、OpenCode 138、Pi 33，
+真实会话内搜索与全局搜索均通过，原始数据 mtime 未变化。
+
 ### 调试
 
 ```powershell

@@ -22,6 +22,8 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:native": "node tests/e2e-native/run.mjs",
     "test:e2e:native:build": "pnpm tauri build --debug --no-bundle --features e2e && node tests/e2e-native/run.mjs",
+    "test:e2e:real:prepare": "node tests/e2e-native/real-prepare.mjs",
+    "test:e2e:real": "node tests/e2e-native/real.mjs",
     "tauri": "tauri"
   },
   "license": "MIT",
