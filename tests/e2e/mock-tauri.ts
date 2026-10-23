@@ -265,6 +265,11 @@ export async function installMockTauri(page: Page): Promise<void> {
       };
       const calls: string[] = [];
       (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__ = calls;
+      let updateMetadata: unknown = null;
+      (window as unknown as { __E2E_SET_UPDATE__: (value: unknown) => void }).__E2E_SET_UPDATE__ =
+        (value) => {
+          updateMetadata = value;
+        };
 
       const profile = {
         source: "claude",
@@ -365,7 +370,7 @@ export async function installMockTauri(page: Page): Promise<void> {
         list_subagents: () => [fixtures.subagent, fixtures.nestedSubagent],
         get_subagent_detail: (args) =>
           args.agentId === "agent-demo-2" ? fixtures.nestedSubagentPage : fixtures.subagentPage,
-        "plugin:updater|check": () => null,
+        "plugin:updater|check": () => updateMetadata,
         list_profiles: () => profiles,
         create_profile: () => {
           profiles = [profile];

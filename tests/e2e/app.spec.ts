@@ -254,3 +254,25 @@ test("update check handles the no-update path", async ({ page }) => {
   );
   expect(calls).toContain("plugin:updater|check");
 });
+
+test("available update changelog is rendered as Markdown", async ({ page }) => {
+  await page.goto("/settings");
+  await page.evaluate(() => {
+    (
+      window as unknown as { __E2E_SET_UPDATE__: (value: unknown) => void }
+    ).__E2E_SET_UPDATE__({
+      rid: 1,
+      currentVersion: "0.4.0",
+      version: "0.5.0",
+      date: "2026-10-22",
+      body: "## 新版本\n\n- **重要** 修复\n\n`code`",
+      rawJson: "{}",
+    });
+  });
+
+  await page.getByRole("button", { name: "检查更新" }).click();
+  await expect(page.getByText("发现新版本 v0.5.0，可以下载并安装。")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "新版本" })).toBeVisible();
+  await expect(page.getByText("重要")).toBeVisible();
+  await expect(page.getByText("## 新版本")).toHaveCount(0);
+});

@@ -417,7 +417,9 @@
           </div>
           <p class="mt-2 break-words text-xs {updateStatus === 'error' ? 'text-danger' : 'text-text-secondary'}">{updateStatusText()}</p>
           {#if availableUpdate?.body}
-            <div class="mt-3 whitespace-pre-wrap rounded-lg bg-bg-tertiary p-3 text-xs leading-relaxed text-text-secondary">{availableUpdate.body}</div>
+            <div class="mt-3 max-h-80 overflow-auto rounded-lg bg-bg-tertiary p-3 text-xs leading-relaxed text-text-secondary">
+              <Markdown content={availableUpdate.body} />
+            </div>
           {/if}
         </div>
         <div class="flex shrink-0 items-center gap-2">
