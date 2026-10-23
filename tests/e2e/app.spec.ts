@@ -33,6 +33,7 @@ test("session detail renders records and expands a subagent", async ({ page }) =
 
   await page.getByText("修复登录流程").first().click();
   await expect(page.getByText("请检查登录流程，定位失败原因。").first()).toBeVisible();
+  await expect(page.getByText("2 个子代理")).toBeVisible();
   await expect(page.getByText(/我先让子代理检查登录模块/)).toBeVisible();
 
   // Subagent calls live at the tool level.
@@ -43,6 +44,10 @@ test("session detail renders records and expands a subagent", async ({ page }) =
   // Expanding the Agent card loads the child transcript through get_subagent_detail.
   await page.getByRole("button", { name: /general-purpose/ }).click();
   await expect(page.getByText("子代理检查了 auth.ts，发现 token 过期判断有误。")).toBeVisible();
+
+  // A grandchild agent spawns from the child transcript: expand it one level deeper.
+  await page.getByRole("button", { name: /explore/ }).click();
+  await expect(page.getByText("孙代理确认：token 过期判断已修复。")).toBeVisible();
 
   const calls = await page.evaluate(
     () => (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__,
@@ -195,4 +200,57 @@ test("settings refresh and save call the config commands", async ({ page }) => {
   );
   expect(calls).toContain("refresh_model_prices");
   expect(calls).toContain("save_dejavu_config");
+});
+
+test("deep search and detail pagination work", async ({ page }) => {
+  await page.goto("/sessions");
+  await expect(page.getByText("共 1 个会话")).toBeVisible();
+
+  await page.getByPlaceholder("搜索当前会话").fill("登录");
+  await page.getByRole("button", { name: "深度全文" }).click();
+  await expect(page.getByText(/深度全文：扫描源文件后找到 1 条/)).toBeVisible();
+
+  // The detail page reports has_more, so the bottom sentinel loads page two.
+  await page.getByText("修复登录流程").first().click();
+  await expect(page.getByText("第二页记录：分页加载成功。")).toBeVisible();
+
+  const calls = await page.evaluate(
+    () => (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__,
+  );
+  expect(calls).toContain("deep_search");
+  expect(calls.filter((cmd) => cmd === "get_session_detail").length).toBeGreaterThan(1);
+});
+
+test("WSL host badge and path are rendered for a non-native session", async ({ page }) => {
+  await page.goto("/sessions");
+  await page.getByRole("button", { name: "OpenCode" }).click();
+  await expect(page.getByText("WSL OpenCode 会话")).toBeVisible();
+  await expect(page.getByText("WSL:Ubuntu")).toBeVisible();
+  await expect(page.getByText("Ubuntu:/home/me/demo")).toBeVisible();
+});
+
+test("Codex process dialog can stop the selected process", async ({ page }) => {
+  await page.goto("/sessions");
+  await page.getByRole("button", { name: "Codex" }).click();
+  await page.getByText("Codex 隔离会话").first().click();
+
+  await page.getByRole("button", { name: "关闭进程" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "确认关闭" }).click();
+
+  const calls = await page.evaluate(
+    () => (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__,
+  );
+  expect(calls).toContain("list_session_processes");
+  expect(calls).toContain("stop_session_process");
+});
+
+test("update check handles the no-update path", async ({ page }) => {
+  await page.goto("/settings");
+  await page.getByRole("button", { name: "检查更新" }).click();
+  await expect(page.getByText("当前已是最新版本。")).toBeVisible();
+  const calls = await page.evaluate(
+    () => (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__,
+  );
+  expect(calls).toContain("plugin:updater|check");
 });

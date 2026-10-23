@@ -142,6 +142,16 @@ async function main() {
   await waitFor(buttonText("Claude 隔离会话"));
   console.log("ok Claude session listed");
 
+  await click(buttonText("Claude 隔离会话"));
+  await waitFor(leafText("这是来自隔离夹具的 Claude 回复"));
+  await click("//button[normalize-space(.)='+工具']");
+  await click(buttonText("根子代理"));
+  await waitFor(leafText("根子代理开始"));
+  await click(buttonText("explore"));
+  await waitFor(leafText("孙代理完成：嵌套检查通过。"));
+  console.log("ok two-level Claude subagents expand");
+  await click("//button[normalize-space(.)='← 返回']");
+
   await click(`//button[normalize-space(.)='OpenCode']`);
   await waitFor(buttonText("OpenCode v2 隔离会话"));
   await waitFor(buttonText("OpenCode v1 隔离会话"));

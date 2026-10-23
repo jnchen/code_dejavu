@@ -29,7 +29,7 @@ const capabilities: Capabilities = {
 const sources: SourceInfo[] = [
   { id: "claude", display_name: "Claude Code", available: true, capabilities },
   { id: "codex", display_name: "Codex", available: true, capabilities },
-  { id: "opencode", display_name: "OpenCode", available: true, capabilities },
+  { id: "opencode", display_name: "OpenCode", available: true, capabilities, hosts: ["WSL:Ubuntu"] },
   { id: "pi", display_name: "PiAgent", available: true, capabilities },
 ];
 
@@ -48,12 +48,49 @@ const session: SessionSummary = {
   model_contexts: [{ provider: "anthropic", model: "claude-sonnet-4-5" }],
 };
 
+const codexSession: SessionSummary = {
+  source: "codex",
+  session_id: "codex-e2e-0001",
+  project: "C--Codes-demo",
+  project_path: "C:\\Codes\\demo",
+  first_prompt: "Codex 隔离会话",
+  agent_title: "Codex 隔离会话",
+  created_at: "2026-10-21 11:00:00",
+  updated_at: "2026-10-21 11:00:03",
+  timestamp: "2026-10-21 11:00:03",
+  file_size_bytes: 1024,
+  subagent_count: 0,
+};
+
+const wslSession: SessionSummary = {
+  source: "opencode",
+  session_id: "ses_wsl_demo",
+  project: "@wsl:Ubuntu/C--home-me-demo",
+  project_path: "\\\\wsl.localhost\\Ubuntu\\home\\me\\demo",
+  first_prompt: "WSL OpenCode 会话",
+  agent_title: "WSL OpenCode 会话",
+  created_at: "2026-10-21 09:00:00",
+  updated_at: "2026-10-21 09:00:00",
+  timestamp: "2026-10-21 09:00:00",
+  file_size_bytes: 512,
+  subagent_count: 0,
+};
+
 const subagent: SubagentInfo = {
   agent_id: "agent-demo-1",
   agent_type: "general-purpose",
   description: "检查登录模块",
   tool_use_id: "call-agent-1",
   record_count: 3,
+};
+
+const nestedSubagent: SubagentInfo = {
+  agent_id: "agent-demo-2",
+  agent_type: "explore",
+  description: "检查 token 过期",
+  tool_use_id: "call-agent-2",
+  record_count: 1,
+  parent_agent_id: "agent-demo-1",
 };
 
 const records: SessionRecord[] = [
@@ -108,8 +145,28 @@ const detailPage: PaginatedRecords = {
   records,
   start_byte_offset: 0,
   next_byte_offset: 4,
-  has_more: false,
+  has_more: true,
   has_earlier: false,
+};
+
+const detailPage2: PaginatedRecords = {
+  records: [
+    {
+      record_type: "assistant",
+      content_preview: "第二页记录：分页加载成功。",
+      timestamp: "2026-10-21 12:00:05",
+      tool_name: null,
+      tool_use_id: null,
+      tool_input: null,
+      diff: null,
+      level: "content",
+      byte_offset: 4,
+    },
+  ],
+  start_byte_offset: 4,
+  next_byte_offset: 5,
+  has_more: false,
+  has_earlier: true,
 };
 
 const subagentPage: PaginatedRecords = {
@@ -118,6 +175,38 @@ const subagentPage: PaginatedRecords = {
       record_type: "assistant",
       content_preview: "子代理检查了 auth.ts，发现 token 过期判断有误。",
       timestamp: "2026-10-21 12:00:03",
+      tool_name: null,
+      tool_use_id: null,
+      tool_input: null,
+      diff: null,
+      level: "content",
+      byte_offset: 0,
+    },
+    {
+      record_type: "assistant",
+      content_preview: "",
+      timestamp: "2026-10-21 12:00:03",
+      tool_name: "Agent",
+      tool_use_id: "call-agent-2",
+      tool_input: { prompt: "确认 token 过期判断" },
+      diff: null,
+      level: "tool",
+      byte_offset: 1,
+      group_id: "nested-turn",
+    },
+  ],
+  start_byte_offset: 0,
+  next_byte_offset: 2,
+  has_more: false,
+  has_earlier: false,
+};
+
+const nestedSubagentPage: PaginatedRecords = {
+  records: [
+    {
+      record_type: "assistant",
+      content_preview: "孙代理确认：token 过期判断已修复。",
+      timestamp: "2026-10-21 12:00:04",
       tool_name: null,
       tool_use_id: null,
       tool_input: null,
@@ -163,9 +252,14 @@ export async function installMockTauri(page: Page): Promise<void> {
       const fixtures = data as {
         sources: unknown;
         session: unknown;
+        codexSession: unknown;
+        wslSession: unknown;
         subagent: unknown;
+        nestedSubagent: unknown;
         detail: unknown;
+        detail2: unknown;
         subagentPage: unknown;
+        nestedSubagentPage: unknown;
         dashboard: unknown;
         indexStatus: unknown;
       };
@@ -238,7 +332,40 @@ export async function installMockTauri(page: Page): Promise<void> {
         last_active: "2026-10-22 10:00",
       };
 
+      const bySource = (source: unknown) => {
+        if (source === "codex") return [fixtures.codexSession];
+        if (source === "opencode") return [fixtures.wslSession];
+        return [fixtures.session];
+      };
+      const processes = [
+        {
+          pid: 4242,
+          parent_pid: 1000,
+          command: "codex --resume codex-e2e-0001",
+          cwd: "C:\Codes\demo",
+          started_at: 1790000000000,
+          run_time_seconds: 12,
+          process_count: 1,
+          match_reason: "session-id",
+        },
+      ];
+
       const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
+        browse_sessions: (args) => bySource(args.source),
+        list_sessions: (args) => bySource(args.source),
+        search_sessions: (args) =>
+          args.source ? bySource(args.source) : [fixtures.session, fixtures.codexSession, fixtures.wslSession],
+        deep_search: () => [fixtures.session],
+        get_session_detail: (args) =>
+          Number(args.byteOffset ?? 0) > 0 ? fixtures.detail2 : fixtures.detail,
+        get_session_tail: () => fixtures.detail,
+        get_session_before: () => fixtures.detail,
+        list_session_processes: (args) => (args.source === "codex" ? processes : []),
+        stop_session_process: () => null,
+        list_subagents: () => [fixtures.subagent, fixtures.nestedSubagent],
+        get_subagent_detail: (args) =>
+          args.agentId === "agent-demo-2" ? fixtures.nestedSubagentPage : fixtures.subagentPage,
+        "plugin:updater|check": () => null,
         list_profiles: () => profiles,
         create_profile: () => {
           profiles = [profile];
@@ -280,9 +407,6 @@ export async function installMockTauri(page: Page): Promise<void> {
       const defaults: Record<string, unknown> = {
         list_sources: fixtures.sources,
         list_sessions: [fixtures.session],
-        browse_sessions: [fixtures.session],
-        search_sessions: [fixtures.session],
-        deep_search: [fixtures.session],
         dashboard_summary: fixtures.dashboard,
         get_index_status: fixtures.indexStatus,
         rebuild_index: fixtures.indexStatus,
@@ -290,8 +414,6 @@ export async function installMockTauri(page: Page): Promise<void> {
         get_session_first_prompt: "修复登录流程，定位失败原因。",
         list_subagents: [fixtures.subagent],
         get_session_detail: fixtures.detail,
-        get_session_before: fixtures.detail,
-        get_session_tail: fixtures.detail,
         get_subagent_detail: fixtures.subagentPage,
         search_in_session: [
           {
@@ -355,6 +477,19 @@ export async function installMockTauri(page: Page): Promise<void> {
       (window as unknown as { __TAURI_EVENT_PLUGIN_INTERNALS__: unknown })
         .__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     },
-    { sources, session, subagent, detail: detailPage, subagentPage, dashboard, indexStatus },
+    {
+      sources,
+      session,
+      codexSession,
+      wslSession,
+      subagent,
+      nestedSubagent,
+      detail: detailPage,
+      detail2: detailPage2,
+      subagentPage,
+      nestedSubagentPage,
+      dashboard,
+      indexStatus,
+    },
   );
 }

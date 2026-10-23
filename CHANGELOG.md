@@ -20,8 +20,9 @@
   终端卡片。
 - 未安装 OpenCode v2 的用户不受影响：纯 v1 数据库仍走原有解析路径。
 - 新增两层 E2E 测试：Playwright 前端测试使用内存 IPC 夹具，覆盖会话、全部主页面、
-  快照/记忆/规则/指令/设置等写流程；原生 Tauri WebDriver 测试使用一次性 home 和夹具数据，
-  覆盖 Claude、Codex、OpenCode v1/v2、Pi 的真实解析链路。二者都不会读取或修改真实 agent
+  快照/记忆/规则/指令/设置等写流程，以及分页、深度搜索、进程关闭、WSL 徽标、更新检查和
+  多级子代理；原生 Tauri WebDriver 测试使用一次性 home 和夹具数据，覆盖 Claude、Codex、
+  OpenCode v1/v2、Pi 的真实解析链路与两级子代理。二者都不会读取或修改真实 agent
   记录。详见 [`docs/E2E_TESTING.md`](docs/E2E_TESTING.md)。
 
 ## 0.4.0 - 2026-08-13

@@ -62,7 +62,15 @@ export function seed(root) {
         type: "assistant",
         message: {
           role: "assistant",
-          content: [{ type: "text", text: "这是来自隔离夹具的 Claude 回复" }],
+          content: [
+            { type: "text", text: "这是来自隔离夹具的 Claude 回复" },
+            {
+              type: "tool_use",
+              id: "call-root",
+              name: "Agent",
+              input: { description: "根子代理", subagent_type: "general-purpose", prompt: "检查登录" },
+            },
+          ],
           model: "claude-sonnet-4-5",
           usage: { input_tokens: 10, output_tokens: 5 },
         },
@@ -70,6 +78,75 @@ export function seed(root) {
         cwd,
         sessionId: CLAUDE_SESSION,
         uuid: "e2e-assistant-1",
+      }),
+    ].join("\n") + "\n",
+  );
+
+  // Two-level Claude subagents: the child transcript itself spawns a grandchild.
+  const subagentDir = join(
+    home,
+    ".claude",
+    "projects",
+    CLAUDE_PROJECT,
+    CLAUDE_SESSION,
+    "subagents",
+  );
+  write(
+    join(subagentDir, "agent-root.meta.json"),
+    JSON.stringify({
+      agentType: "general-purpose",
+      description: "根子代理",
+      toolUseId: "call-root",
+      spawnDepth: 1,
+    }),
+  );
+  write(
+    join(subagentDir, "agent-root.jsonl"),
+    [
+      JSON.stringify({
+        type: "assistant",
+        isSidechain: true,
+        agentId: "agent-root",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "根子代理开始" },
+            {
+              type: "tool_use",
+              id: "call-nested",
+              name: "Agent",
+              input: { description: "嵌套子代理", subagent_type: "explore", prompt: "确认修复" },
+            },
+          ],
+        },
+        timestamp: "2026-10-21T10:00:02.000Z",
+        sessionId: CLAUDE_SESSION,
+      }),
+    ].join("\n") + "\n",
+  );
+  write(
+    join(subagentDir, "agent-nested.meta.json"),
+    JSON.stringify({
+      agentType: "explore",
+      description: "嵌套子代理",
+      toolUseId: "call-nested",
+      spawnDepth: 2,
+      parentAgentId: "agent-root",
+    }),
+  );
+  write(
+    join(subagentDir, "agent-nested.jsonl"),
+    [
+      JSON.stringify({
+        type: "assistant",
+        isSidechain: true,
+        agentId: "agent-nested",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "孙代理完成：嵌套检查通过。" }],
+        },
+        timestamp: "2026-10-21T10:00:03.000Z",
+        sessionId: CLAUDE_SESSION,
       }),
     ].join("\n") + "\n",
   );
