@@ -202,6 +202,29 @@ test("settings refresh and save call the config commands", async ({ page }) => {
   expect(calls).toContain("save_dejavu_config");
 });
 
+test("custom resume commands are configurable per agent", async ({ page }) => {
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Déjà Vu 设置" })).toBeVisible();
+
+  // Every desktop flavor has a preset: Claude via the documented --desktop --resume bridge,
+  // OpenCode via its opencode:// handler (app focus), Codex via codex://threads/<id>.
+  await page.getByRole("button", { name: /Claude Desktop/ }).click();
+  await page.getByRole("button", { name: /OpenCode Desktop/ }).click();
+  await page.getByRole("button", { name: "Codex Desktop 深链" }).click();
+  await page.getByLabel("DeepSeek Harness 自定义恢复命令").fill("dsh web");
+  await page.getByRole("button", { name: "保存", exact: true }).first().click();
+
+  const saved = await page.evaluate(
+    () =>
+      (window as unknown as { __E2E_SAVED_CONFIG__?: { resume_commands?: Record<string, string> } })
+        .__E2E_SAVED_CONFIG__,
+  );
+  expect(saved?.resume_commands?.claude).toBe("claude --desktop --resume {session}");
+  expect(saved?.resume_commands?.opencode).toContain("opencode://open");
+  expect(saved?.resume_commands?.codex).toContain("codex://threads/{session_raw}");
+  expect(saved?.resume_commands?.dsh).toBe("dsh web");
+});
+
 test("deep search and detail pagination work", async ({ page }) => {
   await page.goto("/sessions");
   await expect(page.getByText("共 1 个会话")).toBeVisible();
@@ -227,6 +250,19 @@ test("WSL host badge and path are rendered for a non-native session", async ({ p
   await expect(page.getByText("WSL OpenCode 会话")).toBeVisible();
   await expect(page.getByText("WSL:Ubuntu")).toBeVisible();
   await expect(page.getByText("Ubuntu:/home/me/demo")).toBeVisible();
+});
+
+test("DeepSeek Harness source renders its sessions", async ({ page }) => {
+  await page.goto("/sessions");
+  await page.getByRole("button", { name: "DeepSeek Harness" }).click();
+  await expect(page.getByText("DSH 隔离会话")).toBeVisible();
+  await page.getByText("DSH 隔离会话").first().click();
+  await expect(page.getByText("请检查登录流程，定位失败原因。").first()).toBeVisible();
+  await page.getByRole("button", { name: "恢复会话" }).click();
+  const calls = await page.evaluate(
+    () => (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__,
+  );
+  expect(calls).toContain("resume_session");
 });
 
 test("Codex process dialog can stop the selected process", async ({ page }) => {

@@ -31,6 +31,7 @@ const sources: SourceInfo[] = [
   { id: "codex", display_name: "Codex", available: true, capabilities },
   { id: "opencode", display_name: "OpenCode", available: true, capabilities, hosts: ["WSL:Ubuntu"] },
   { id: "pi", display_name: "PiAgent", available: true, capabilities },
+  { id: "dsh", display_name: "DeepSeek Harness", available: true, capabilities },
 ];
 
 const session: SessionSummary = {
@@ -58,6 +59,20 @@ const codexSession: SessionSummary = {
   created_at: "2026-10-21 11:00:00",
   updated_at: "2026-10-21 11:00:03",
   timestamp: "2026-10-21 11:00:03",
+  file_size_bytes: 1024,
+  subagent_count: 0,
+};
+
+const dshSession: SessionSummary = {
+  source: "dsh",
+  session_id: "dsh-e2e-0001",
+  project: "C--Codes-demo",
+  project_path: "C:\Codes\demo",
+  first_prompt: "DSH 隔离会话",
+  agent_title: "DSH 隔离会话",
+  created_at: "2026-10-21 08:00:00",
+  updated_at: "2026-10-21 08:00:03",
+  timestamp: "2026-10-21 08:00:03",
   file_size_bytes: 1024,
   subagent_count: 0,
 };
@@ -229,6 +244,7 @@ const dashboard: DashboardSummary = {
     { source: "codex", count: 1, last_active: "2026-10-20 09:00:00" },
     { source: "opencode", count: 0, last_active: null },
     { source: "pi", count: 0, last_active: null },
+    { source: "dsh", count: 1, last_active: "2026-10-21 08:00:00" },
   ],
   activity: [
     { day: "2026-10-20", count: 1 },
@@ -254,6 +270,7 @@ export async function installMockTauri(page: Page): Promise<void> {
         session: unknown;
         codexSession: unknown;
         wslSession: unknown;
+        dshSession: unknown;
         subagent: unknown;
         nestedSubagent: unknown;
         detail: unknown;
@@ -340,6 +357,7 @@ export async function installMockTauri(page: Page): Promise<void> {
       const bySource = (source: unknown) => {
         if (source === "codex") return [fixtures.codexSession];
         if (source === "opencode") return [fixtures.wslSession];
+        if (source === "dsh") return [fixtures.dshSession];
         return [fixtures.session];
       };
       const processes = [
@@ -406,7 +424,11 @@ export async function installMockTauri(page: Page): Promise<void> {
         list_instruction_artifacts: () => [instruction],
         get_instruction_artifact: () => ({ ...instruction, content: "# Mock instructions" }),
         save_instruction_artifact: () => null,
-        save_dejavu_config: () => null,
+        save_dejavu_config: (args) => {
+          (window as unknown as { __E2E_SAVED_CONFIG__: unknown }).__E2E_SAVED_CONFIG__ =
+            args.config;
+          return null;
+        },
       };
 
       const defaults: Record<string, unknown> = {
@@ -455,6 +477,7 @@ export async function installMockTauri(page: Page): Promise<void> {
           prices: [],
           wsl_scan: false,
           wsl_excluded: [],
+          resume_commands: {},
         },
         list_tools: { sources: [] },
         refresh_model_prices: { models: [], source: "none", used_fallback: true, error: null },
@@ -487,6 +510,7 @@ export async function installMockTauri(page: Page): Promise<void> {
       session,
       codexSession,
       wslSession,
+      dshSession,
       subagent,
       nestedSubagent,
       detail: detailPage,

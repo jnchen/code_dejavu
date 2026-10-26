@@ -8,8 +8,9 @@ import { defineConfig } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests/e2e",
-  timeout: 30_000,
-  expect: { timeout: 8_000 },
+  timeout: 45_000,
+  // First Vite dev-server compile can exceed a tight assertion timeout on a cold start.
+  expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
   reporter: [["list"]],

@@ -50,6 +50,7 @@ const originals = {
   claudeProjects: join(userHome, ".claude", "projects"),
   codexSessions: join(userHome, ".codex", "sessions"),
   piSessions: join(userHome, ".pi", "agent", "sessions"),
+  dshSessions: join(userHome, ".dsh", "sessions"),
   opencodeDb: join(userHome, ".local", "share", "opencode", "opencode.db"),
 };
 
@@ -69,6 +70,9 @@ copy(join(userHome, ".codex", "config.toml"), join(home, ".codex", "config.toml"
 
 copy(join(userHome, ".pi", "agent", "sessions"), join(home, ".pi", "agent", "sessions"));
 copy(join(userHome, ".pi", "agent", "settings.json"), join(home, ".pi", "agent", "settings.json"));
+
+copy(join(userHome, ".dsh", "sessions"), join(home, ".dsh", "sessions"));
+copy(join(userHome, ".dsh", "AGENTS.md"), join(home, ".dsh", "AGENTS.md"));
 
 copy(join(userHome, ".config", "opencode"), join(home, ".config", "opencode"));
 
@@ -180,6 +184,7 @@ const manifest = {
       ? readdirSync(originals.claudeProjects, { withFileTypes: true }).length
       : 0,
   },
+  hasDsh: existsSync(originals.dshSessions),
 };
 writeFileSync(join(dest, "manifest.json"), JSON.stringify(manifest, null, 2));
 console.log(JSON.stringify(manifest, null, 2));

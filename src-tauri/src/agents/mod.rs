@@ -24,6 +24,7 @@ use std::sync::{Arc, OnceLock};
 
 pub mod claude;
 pub mod codex;
+pub mod dsh;
 pub mod multi_host;
 pub mod opencode;
 pub mod pi;
@@ -581,6 +582,7 @@ impl ProviderRegistry {
 
 pub use claude::ClaudeProvider;
 pub use codex::CodexProvider;
+pub use dsh::DshProvider;
 pub use multi_host::MultiHostProvider;
 pub use opencode::OpenCodeProvider;
 pub use pi::PiProvider;
@@ -607,6 +609,10 @@ pub fn default_providers(claude_paths: ClaudePaths) -> Vec<Arc<MultiHostProvider
         Arc::new(MultiHostProvider::new(
             Arc::new(PiProvider::new()),
             Box::new(|host, home| Arc::new(PiProvider::for_host(host, home))),
+        )),
+        Arc::new(MultiHostProvider::new(
+            Arc::new(DshProvider::new()),
+            Box::new(|host, home| Arc::new(DshProvider::for_host(host, home))),
         )),
     ]
 }

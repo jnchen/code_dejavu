@@ -72,7 +72,7 @@ pnpm test:e2e:native
 
 | 变量 | 用途 |
 | --- | --- |
-| `USERPROFILE` / `HOME` | Claude、Codex、OpenCode、Pi 的 home |
+| `USERPROFILE` / `HOME` | Claude、Codex、OpenCode、Pi、DSH 的 home |
 | `APPDATA` | `CodeDejavu/config.json` |
 | `LOCALAPPDATA` | 应用索引、归档等数据目录 |
 | `XDG_DATA_HOME` 等 | Linux/macOS 路径 |
@@ -81,7 +81,7 @@ pnpm test:e2e:native
 
 ## 3. 真实数据只读核心测试（可选）
 
-用你的真实数据验证索引、四类来源、打开会话和搜索，但应用只读取一份副本：
+用你的真实数据验证索引、各类来源、打开会话和搜索，但应用只读取一份副本：
 
 ```powershell
 pnpm test:e2e:real:prepare   # 复制真实数据到 .tmp-real-e2e（OpenCode DB 用 SQLite 在线备份）

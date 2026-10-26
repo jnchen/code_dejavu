@@ -183,6 +183,13 @@ async function main() {
   await click(buttonText("Pi 隔离会话"));
   await waitFor(leafText("Pi 助手回复"));
   console.log("ok Pi session tree parsed");
+
+  await click("//button[normalize-space(.)='← 返回']");
+  await click("//button[normalize-space(.)='DeepSeek Harness']");
+  await waitFor(buttonText("DSH 隔离会话"));
+  await click(buttonText("DSH 隔离会话"));
+  await waitFor(leafText("DSH 助手回复"));
+  console.log("ok zstd-compressed DSH session parsed");
 }
 
 try {

@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "code-dejavu"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bincode",
  "chrono",
@@ -641,6 +641,7 @@ dependencies = [
  "tauri-plugin-wdio-webdriver",
  "thiserror 2.0.18",
  "walkdir",
+ "zstd",
 ]
 
 [[package]]

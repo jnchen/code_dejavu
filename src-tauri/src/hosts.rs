@@ -36,7 +36,7 @@ const USER_SEPARATOR: char = '~';
 /// treating it as a host produces a badge for a store with nothing in it — worse, it can make a
 /// distro look multi-account and force `~user` suffixes onto keys for no reason. Each entry below
 /// is a store a provider would actually read.
-const AGENT_MARKERS: [&str; 8] = [
+const AGENT_MARKERS: [&str; 9] = [
     ".claude/projects",
     ".claude/history.jsonl",
     ".claude.json",
@@ -45,6 +45,7 @@ const AGENT_MARKERS: [&str; 8] = [
     ".config/opencode/opencode.json",
     ".config/opencode/opencode.jsonc",
     ".pi/agent/sessions",
+    ".dsh/sessions",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

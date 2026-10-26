@@ -367,6 +367,8 @@ export interface DejavuConfig {
   wsl_scan: boolean;
   /** Distributions to skip; reading a distro's share starts it. */
   wsl_excluded: string[];
+  /** Per-agent custom resume command templates keyed by source id. `{session}` is the id. */
+  resume_commands?: Record<string, string>;
 }
 
 export interface InstructionArtifact {

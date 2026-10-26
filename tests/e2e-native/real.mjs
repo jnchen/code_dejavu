@@ -154,7 +154,9 @@ async function main() {
   await click("//a[contains(@href, '/sessions')]");
   await waitForBody((text) => text.includes("会话历史"));
 
-  for (const name of ["Claude Code", "Codex CLI", "OpenCode", "PiAgent"]) {
+  const sources = ["Claude Code", "Codex CLI", "OpenCode", "PiAgent"];
+  if (fixtures.hasDsh) sources.push("DeepSeek Harness");
+  for (const name of sources) {
     await click(`//button[normalize-space(.)='${name}']`);
     const text = await waitForBody(
       (value) => /共\s+\d+\s+个会话/.test(value),
@@ -200,6 +202,7 @@ async function main() {
         claudeProjects: join(process.env.USERPROFILE, ".claude", "projects"),
         codexSessions: join(process.env.USERPROFILE, ".codex", "sessions"),
         piSessions: join(process.env.USERPROFILE, ".pi", "agent", "sessions"),
+        dshSessions: join(process.env.USERPROFILE, ".dsh", "sessions"),
         opencodeDb: join(process.env.USERPROFILE, ".local", "share", "opencode", "opencode.db"),
       }[key];
       const after = statSync(realPath).mtimeMs;

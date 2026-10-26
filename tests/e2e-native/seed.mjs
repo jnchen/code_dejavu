@@ -6,6 +6,7 @@
  * database and Pi sessions are never opened.
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { zstdCompressSync } from "node:zlib";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -250,6 +251,66 @@ export function seed(root) {
       }),
     ].join("\n") + "\n",
   );
+
+  const dshSession = "dsh-e2e-1";
+  const dshDir = join(
+    home,
+    ".dsh",
+    "sessions",
+    "--C--Codes-demo--",
+    dshSession,
+  );
+  const dshEvents = [
+    {
+      type: "session",
+      version: 4,
+      id: dshSession,
+      createdAt: 1790000000000,
+      cwd,
+      isSeeded: false,
+      delegationDepth: 0,
+    },
+    { type: "turn/start", data: { turn: 1 }, seq: 0, time: 1790000000100 },
+    {
+      type: "user/message",
+      data: {
+        content: [{ type: "text", text: "DSH 隔离会话" }],
+        source: { kind: "user" },
+        role: "user",
+        id: "dsh-user-1",
+      },
+      seq: 1,
+      time: 1790000000200,
+      surfaceOp: "append",
+    },
+    {
+      type: "assistant/message",
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "DSH 助手回复" }],
+          source: { kind: "model", provider: "deepseek", model: "deepseek-v4" },
+          id: "dsh-assistant-1",
+        },
+        usage: { inputTokens: 10, outputTokens: 5 },
+      },
+      seq: 2,
+      time: 1790000000300,
+      surfaceOp: "append",
+    },
+    {
+      type: "session/title",
+      data: { title: "DSH 隔离会话" },
+      seq: 3,
+      time: 1790000000400,
+    },
+  ]
+    .map((event) => JSON.stringify(event))
+    .join("\n") + "\n";
+  mkdirSync(dshDir, { recursive: true });
+  writeFileSync(join(dshDir, "session.v4.jsonl.zstd"), zstdCompressSync(Buffer.from(dshEvents)));
 
   // OpenCode: one v2-projected session and one v1-only session in the same database. This is the
   // exact shape an upgraded install can have, and exercises the dual-read path through real IPC.

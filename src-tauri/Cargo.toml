@@ -1,6 +1,6 @@
 [package]
 name = "code-dejavu"
-version = "0.5.0"
+version = "0.6.0"
 description = "Coding agent session and profile manager"
 authors = ["Code Déjà Vu contributors"]
 edition = "2021"
@@ -32,5 +32,6 @@ rayon = "1.10"
 jieba-rs = "0.7"
 bincode = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
+zstd = "0.13"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "system-proxy"] }

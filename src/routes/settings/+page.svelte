@@ -185,6 +185,7 @@
         prices: dc.prices ?? [],
         wsl_scan: dc.wsl_scan ?? true,
         wsl_excluded: dc.wsl_excluded ?? [],
+        resume_commands: dc.resume_commands ?? {},
       };
       sources = sourceList;
       configArtifacts = configs;
@@ -301,6 +302,67 @@
 
   function presetsFor(sourceId: string) {
     return argPresets[sourceId] ?? [];
+  }
+
+  const defaultResumeCommands: Record<string, string> = {
+    claude: "claude --resume {session}",
+    codex: "codex resume {session}",
+    opencode: "opencode --session {session}",
+    pi: "pi --session {session}",
+    dsh: "dsh tui --resume {session}",
+  };
+
+  function resumeTemplateFor(sourceId: string): string {
+    return dejavuConfig?.resume_commands?.[sourceId] ?? "";
+  }
+
+  function setResumeTemplate(sourceId: string, value: string) {
+    if (!dejavuConfig) return;
+    dejavuConfig.resume_commands = {
+      ...(dejavuConfig.resume_commands ?? {}),
+      [sourceId]: value,
+    };
+  }
+
+  function resumePresetsFor(sourceId: string): Array<{ label: string; value: string }> {
+    if (sourceId === "claude") {
+      return [
+        // Documented CLI bridge: opens the exact CLI session in Claude Desktop.
+        { label: t("set.resumePreset.claudeDesktop"), value: "claude --desktop --resume {session}" },
+      ];
+    }
+    if (sourceId === "opencode") {
+      return [
+        {
+          label: t("set.resumePreset.opencodeDesktop"),
+          value: isWindows ? 'cmd /c start "" "opencode://open"' : 'open "opencode://open"',
+        },
+      ];
+    }
+    if (sourceId === "codex") {
+      return [
+        {
+          label: t("set.resumePreset.codexDesktop"),
+          value: isWindows
+            ? "powershell -NoProfile -Command \"Start-Process 'codex://threads/{session_raw}'\""
+            : "open 'codex://threads/{session_raw}'",
+        },
+      ];
+    }
+    if (sourceId === "dsh") {
+      return [
+        { label: t("set.resumePreset.dshWeb"), value: "dsh web" },
+        {
+          label: t("set.resumePreset.dshDesktop"),
+          value: isWindows ? 'cmd /c start "" "dsh://open"' : 'open "dsh://open"',
+        },
+        {
+          label: t("set.resumePreset.dshHeadless"),
+          value: "dsh --profile headless --session-id {session} continue",
+        },
+      ];
+    }
+    return [];
   }
 
   function configsFor(sourceId: string): InstructionArtifact[] {
@@ -546,10 +608,12 @@
           {/if}
 
           <div class="rounded-xl border border-border bg-bg-secondary p-4">
-            <h3 class="mb-3 text-sm font-medium">{t("set.resumeArgs")}</h3>
+            <h3 class="mb-1 text-sm font-medium">{t("set.resumeArgs")}</h3>
+            <p class="mb-3 text-[11px] leading-relaxed text-text-muted">{t("set.resumeCommandHint")}</p>
             <div class="space-y-3">
               {#each resumableSources as source}
                 {@const args = argsFor(source.id)}
+                {@const resumePresets = resumePresetsFor(source.id)}
                 <div class="border-t border-border-subtle pt-3 first:border-t-0 first:pt-0">
                   <div class="mb-2 flex items-center justify-between gap-3">
                     <div>
@@ -595,6 +659,27 @@
                       class="w-48 rounded-lg border border-border bg-bg px-2 py-1 font-mono text-[10px] outline-none focus:border-accent"
                     />
                     <button onclick={() => addAgentArg(source.id)} class="rounded-lg border border-border px-2 py-1 text-[10px] hover:bg-bg-hover">{t("common.add")}</button>
+                  </div>
+
+                  <div class="mt-2">
+                    <div class="mb-1 text-[10px] text-text-secondary">{t("set.resumeCommand")}</div>
+                    <input
+                      value={resumeTemplateFor(source.id)}
+                      oninput={(e) => setResumeTemplate(source.id, (e.target as HTMLInputElement).value)}
+                      placeholder={defaultResumeCommands[source.id] ?? t("set.resumeCommand")}
+                      aria-label="{source.display_name} {t('set.resumeCommand')}"
+                      class="w-full rounded-lg border border-border bg-bg px-2 py-1 font-mono text-[10px] outline-none focus:border-accent"
+                    />
+                    {#if resumePresets.length > 0}
+                      <div class="mt-1.5 flex flex-wrap gap-1.5">
+                        {#each resumePresets as preset}
+                          <button
+                            onclick={() => setResumeTemplate(source.id, preset.value)}
+                            class="rounded-lg border border-border px-2 py-1 text-[10px] hover:bg-bg-hover"
+                          >{preset.label}</button>
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
                 </div>
               {/each}

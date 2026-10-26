@@ -40,6 +40,12 @@ pub struct DejavuConfig {
     /// hatch for one that is slow, huge, or simply not interesting.
     #[serde(default)]
     pub wsl_excluded: Vec<String>,
+    /// Per-agent custom resume command templates, keyed by source id ("codex", "dsh", ...).
+    /// Supported placeholders: `{session}` (quoted id), `{session_raw}`, `{project}` (quoted
+    /// project path) and `{project_raw}`. Placeholders are optional: a frontend that cannot
+    /// deep-link a session (for example `dsh web`) uses a plain command.
+    #[serde(default)]
+    pub resume_commands: HashMap<String, String>,
     #[serde(default, rename = "claude_args", skip_serializing)]
     pub legacy_claude_args: Vec<String>,
 }
@@ -85,6 +91,25 @@ impl DejavuConfig {
     fn args_for(&self, source: &str) -> Vec<String> {
         self.agent_args.get(source).cloned().unwrap_or_default()
     }
+}
+
+/// Expand a user's custom resume template. `None` means "not usable" (missing or empty) and the
+/// caller falls back to the provider's built-in command. Placeholders are optional because some
+/// frontends (DSH web/desktop) have no per-session deep link at all.
+fn custom_resume_command(template: &str, session_id: &str, project_path: &str) -> Option<String> {
+    let template = template.trim();
+    if template.is_empty() {
+        return None;
+    }
+    Some(
+        template
+            .replace("{session_raw}", session_id)
+            .replace("{session}", &crate::agents::quote_command_arg(session_id))
+            .replace("{project_raw}", project_path)
+            .replace("{project}", &crate::agents::quote_command_arg(project_path))
+            .trim()
+            .to_string(),
+    )
 }
 
 fn default_prices() -> Vec<PriceRow> {
@@ -192,6 +217,7 @@ impl Default for DejavuConfig {
             prices: default_prices(),
             wsl_scan: default_wsl_scan(),
             wsl_excluded: Vec::new(),
+            resume_commands: HashMap::new(),
             legacy_claude_args: Vec::new(),
         }
     }
@@ -653,9 +679,14 @@ pub async fn resume_session(
         }
         let config = load_config();
         let args = config.args_for(provider.id());
-        let command = provider.resume_command(&session_id, &args).ok_or_else(|| {
-            AppError::Archive(format!("{} 没有恢复命令", provider.display_name()))
-        })?;
+        let command = config
+            .resume_commands
+            .get(provider.id())
+            .and_then(|template| custom_resume_command(template, &session_id, &project_path))
+            .or_else(|| provider.resume_command(&session_id, &args))
+            .ok_or_else(|| {
+                AppError::Archive(format!("{} 没有恢复命令", provider.display_name()))
+            })?;
         launch_shell(&config, &project_path, Some(command))
     })
     .await
@@ -768,6 +799,38 @@ pub async fn open_in_terminal(project_path: String) -> Result<(), AppError> {
     })
     .await
     .map_err(|e| AppError::Archive(e.to_string()))?
+}
+
+#[cfg(test)]
+mod resume_command_tests {
+    use super::custom_resume_command;
+
+    #[test]
+    fn expands_session_and_project_placeholders() {
+        assert_eq!(
+            custom_resume_command(
+                "codex-desktop {session_raw} --path {project_raw}",
+                "thread 1",
+                r"C:\Codes\demo"
+            ),
+            Some("codex-desktop thread 1 --path C:\\Codes\\demo".to_string())
+        );
+        assert_eq!(
+            custom_resume_command("mycli --id {session} --root {project}", "a b", "c d"),
+            Some("mycli --id \"a b\" --root \"c d\"".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_empty_templates_but_keeps_placeholder_free_commands() {
+        assert_eq!(custom_resume_command("", "s", "p"), None);
+        assert_eq!(custom_resume_command("   ", "s", "p"), None);
+        // Frontends without a per-session deep link are legitimate targets.
+        assert_eq!(
+            custom_resume_command("dsh web", "s", "p"),
+            Some("dsh web".to_string())
+        );
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,21 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)，从 `0.2.0` 开始在此记录面向用户的变化。
 
+## 0.6.0 - 2026-10-27
+
+### 新增
+
+- 新增 DeepSeek Harness（`dsh`）会话来源：读取 `$DSH_HOME`（默认 `~/.dsh`）下
+  `sessions/--<project>--/<session>/session[.vN].jsonl[.zstd]`，兼容 raw JSONL 与
+  Zstandard 压缩日志，并解析会话、消息、思考、工具调用/结果、用量、会话内搜索和子代理。
+- 每个 Agent 的恢复命令都可在设置页自定义模板，占位符：`{session}`（带引号 ID）、
+  `{session_raw}`、`{project}`、`{project_raw}`；留空回退各 Agent 默认命令。
+  各桌面端预设：Claude Desktop 用官方 `claude --desktop --resume <id>` 直达会话；
+  Codex Desktop 用 `codex://threads/<id>` 深链；OpenCode Desktop 与 DSH Web/Desktop
+  暂无会话级链接，预设以 `opencode://open` / `dsh://open` 唤起应用后手动选择会话；
+  DSH 另提供 Web / Headless 预设。DSH 亦支持快照/恢复、全局与项目 `AGENTS.md` 指令。
+
+
 ## 0.5.0 - 2026-10-23
 
 ### 新增
@@ -22,9 +37,9 @@
 - 新增两层 E2E 测试：Playwright 前端测试使用内存 IPC 夹具，覆盖会话、全部主页面、
   快照/记忆/规则/指令/设置等写流程，以及分页、深度搜索、进程关闭、WSL 徽标、更新检查和
   多级子代理；原生 Tauri WebDriver 测试使用一次性 home 和夹具数据，覆盖 Claude、Codex、
-  OpenCode v1/v2、Pi 的真实解析链路与两级子代理。二者都不会读取或修改真实 agent
+  OpenCode v1/v2、Pi、DSH 的真实解析链路与两级子代理。二者都不会读取或修改真实 agent
   记录。详见 [`docs/E2E_TESTING.md`](docs/E2E_TESTING.md)。
-- 新增真实数据只读核心测试：复制本机会话到一次性 home 后运行，验证索引、四类来源、
+- 新增真实数据只读核心测试：复制本机会话到一次性 home 后运行，验证索引、各类来源、
   会话打开与真实搜索，原始数据保持只读；测试前后校验 mtime。
 
 ### 修复

@@ -45,6 +45,7 @@ These have useful local artifacts or are already implemented here.
 | Codex CLI | High | Local sessions are already implemented in this repo; config and instruction surfaces should be added carefully. |
 | OpenCode | High | Local SQLite session store is already implemented; child sessions/subagents are readable. |
 | PiAgent | High | Append-only JSONL session trees are implemented with search, usage, resume, and multi-host support. |
+| DeepSeek Harness (`dsh`) | High | Per-session JSONL/Zstandard logs are implemented with sessions, search, usage, resume, instructions, and subagents. |
 | Gemini CLI | Medium-high | Has GEMINI.md, settings, built-in tools, shell/file tools, and MCP. Need inspect local session durability before full provider. |
 | Aider | Medium | Mature CLI with convention files and repo-map behavior. Session artifacts may be less rich than Claude/Codex/OpenCode. |
 | Cline / Roo Code | Medium | Strong local/editor extension model, explicit rules and memory concepts, MCP. Need inspect VS Code storage and extension files. |
@@ -112,6 +113,24 @@ Product implication:
 - Keep v1 support: users are not required to upgrade to OpenCode 2.
 - Treat child sessions as `sessions.subagents`; v2 also supports nested subagents.
 - Keep OpenCode config/instruction surfaces read-only until write semantics are verified.
+
+### DeepSeek Harness (`dsh`)
+
+DeepSeek Harness is implemented as a session provider. Sessions live under
+`$DSH_HOME/sessions/--<project>--/<session>/` as append-only JSONL logs, compressed with
+Zstandard by default. The provider selects the highest `session[.vN]` generation, reads both raw
+and compressed encodings, and parses user/assistant/tool events, usage, titles, search documents,
+instructions (`$DSH_HOME/AGENTS.md`, `~/.agents/AGENTS.md`, project `AGENTS.md`/`CLAUDE.md`), and
+subagent children (`origin: subagent` + `parentSession`).
+
+Product implication:
+
+- Keep session read/search/resume first-class; zstd is the default on-disk encoding.
+- Resume is install-shaped: TUI takes `--resume`, web has no per-session flag, and desktop cannot
+  be booted by the CLI, so the launcher mode is user-configurable (with a custom template).
+- Treat `origin: subagent` sessions as `sessions.subagents`; link them to the parent `subagent`
+  tool call through the catalog label.
+- Do not assume DSH rules or memory surfaces until their contracts are verified.
 
 ### PiAgent
 
