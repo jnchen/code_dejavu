@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { dashboardStore } from "$lib/dashboardStore.svelte";
+  import { indexSync } from "$lib/indexSync.svelte";
   import { t } from "$lib/i18n.svelte";
   import { deferRouteLoad } from "$lib/defer";
 
@@ -63,6 +64,20 @@
     if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
     return bytes + " B";
   }
+
+  // The dashboard totals are index-derived; a background index swap (startup reconcile,
+  // auto refresh) changes them, so reload instead of showing stale numbers.
+  let seenIndexVersion = -1;
+  $effect(() => {
+    const version = indexSync.version;
+    if (seenIndexVersion === -1) {
+      seenIndexVersion = version;
+      return;
+    }
+    if (version === seenIndexVersion) return;
+    seenIndexVersion = version;
+    dashboardStore.refresh();
+  });
 
   onMount(() => {
     return deferRouteLoad(() => {

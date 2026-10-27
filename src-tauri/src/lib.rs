@@ -13,6 +13,7 @@ use paths::ClaudePaths;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use tauri::Manager;
     // Indexing and deep search are throughput work, not latency-critical UI work. Rayon defaults
     // to every logical CPU, which can starve the WebView even though the work is off the UI thread.
     // Reserve at least one logical CPU for UI/event processing and cap background fan-out.
@@ -34,14 +35,6 @@ pub fn run() {
         .collect();
     let registry = agents::ProviderRegistry::new(providers.clone());
 
-    // Global search index: every provider contributes its own searchable documents.
-    let search_engine = services::search::build_in_background(providers.clone());
-    // Keep the index fresh when sessions change on disk (no app restart needed).
-    services::search::spawn_auto_refresh(search_engine.clone(), providers.clone());
-    // Agent installs inside WSL join the same sources once found — off the startup path, since
-    // reading a distro's share boots it.
-    spawn_wsl_discovery(multi_hosts, providers, search_engine.clone());
-
     let builder = tauri::Builder::default();
     // Native E2E only. The plugin opens an embedded WebDriver HTTP server, so it must never be
     // part of a production build.
@@ -52,9 +45,23 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(claude_paths)
-        .manage(search_engine)
-        .manage(registry)
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            // Global search index: every provider contributes its own searchable documents.
+            // Built inside setup so every index swap can be announced to the UI over the app
+            // handle (see services::search::IndexEvent) — background work must not be silent.
+            let search_engine =
+                services::search::build_in_background(handle.clone(), providers.clone());
+            // Keep the index fresh when sessions change on disk (no app restart needed).
+            services::search::spawn_auto_refresh(handle.clone(), search_engine.clone(), providers.clone());
+            // Agent installs inside WSL join the same sources once found — off the startup path,
+            // since reading a distro's share boots it.
+            spawn_wsl_discovery(handle, multi_hosts, providers, search_engine.clone());
+            app.manage(claude_paths);
+            app.manage(search_engine);
+            app.manage(registry);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::sessions::list_sources,
             commands::instructions::list_instruction_artifacts,
@@ -117,6 +124,7 @@ pub fn run() {
 /// Once hosts are adopted the index is rebuilt, so their sessions appear without a restart; the
 /// retry loop is there because the initial index build holds the indexing slot for a while.
 fn spawn_wsl_discovery(
+    app: tauri::AppHandle,
     multi_hosts: Vec<std::sync::Arc<agents::MultiHostProvider>>,
     providers: Vec<std::sync::Arc<dyn agents::AgentProvider>>,
     engine: services::search::SharedSearchEngine,
@@ -135,7 +143,7 @@ fn spawn_wsl_discovery(
             provider.adopt(&homes);
         }
         for _ in 0..60 {
-            if services::search::rebuild(&engine, &providers) {
+            if services::search::rebuild(&engine, &providers, "auto", &app) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_secs(2));

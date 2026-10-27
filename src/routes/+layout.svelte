@@ -5,6 +5,7 @@
   import { page } from "$app/state";
   import { t, toggleLang, initLang } from "$lib/i18n.svelte";
   import { toasts, dismissToast } from "$lib/toast.svelte";
+  import { indexSync } from "$lib/indexSync.svelte";
   import packageInfo from "../../package.json";
 
   let theme = $state<"light" | "dark">("light");
@@ -32,6 +33,9 @@
   }
   onMount(() => {
     initLang();
+    // Background index work announces itself app-wide (sidebar spinner + toast);
+    // pages subscribe separately to reload their index-derived data.
+    indexSync.start();
     // No saved choice → follow the OS. Mirrors the pre-paint script in app.html, so the reactive
     // state matches what was already painted (no flash, correct toggle icon).
     const saved = savedTheme();
@@ -119,6 +123,17 @@
         </a>
       {/each}
     </nav>
+
+    {#if indexSync.building}
+      <div
+        class="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning-dim px-2.5 py-1.5 text-[10px] text-warning"
+        role="status"
+        title={t("footer.indexBuildingTitle")}
+      >
+        <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-warning/30 border-t-warning"></span>
+        {t("footer.indexBuilding")}
+      </div>
+    {/if}
 
     <!-- Footer -->
     <div class="px-4 py-4 border-t border-border">

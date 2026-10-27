@@ -245,13 +245,14 @@ pub async fn get_index_status(
 /// or continued sessions become searchable without restarting the app.
 #[tauri::command]
 pub async fn rebuild_index(
+    app: tauri::AppHandle,
     registry: State<'_, ProviderRegistry>,
     engine: State<'_, SharedSearchEngine>,
 ) -> Result<IndexStatus, AppError> {
     let providers = registry.providers();
     let engine = engine.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::services::search::rebuild(&engine, &providers);
+        crate::services::search::rebuild(&engine, &providers, "manual", &app);
         engine
             .read()
             .map(|guard| guard.status.clone())

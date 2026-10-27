@@ -41,6 +41,7 @@ pub async fn list_profiles(
 
 #[tauri::command]
 pub async fn create_profile(
+    app: tauri::AppHandle,
     registry: State<'_, ProviderRegistry>,
     engine: State<'_, SharedSearchEngine>,
     name: Option<String>,
@@ -56,7 +57,7 @@ pub async fn create_profile(
             // Snapshot creation moves the session store, so the old index would otherwise keep
             // returning live summaries whose database no longer exists. Reconcile it before the
             // command returns; the background watcher remains a fallback for external changes.
-            crate::services::search::rebuild(&engine, &providers);
+            crate::services::search::rebuild(&engine, &providers, "manual", &app);
             Ok(profile)
         })
         .await
@@ -67,6 +68,7 @@ pub async fn create_profile(
 
 #[tauri::command]
 pub async fn restore_profile(
+    app: tauri::AppHandle,
     registry: State<'_, ProviderRegistry>,
     engine: State<'_, SharedSearchEngine>,
     name: String,
@@ -77,7 +79,7 @@ pub async fn restore_profile(
     let engine = engine.inner().clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
         archive_provider(&registry, source.as_deref(), true)?.restore_profile(&name)?;
-        crate::services::search::rebuild(&engine, &providers);
+        crate::services::search::rebuild(&engine, &providers, "manual", &app);
         Ok(())
     })
     .await
@@ -88,6 +90,7 @@ pub async fn restore_profile(
 
 #[tauri::command]
 pub async fn delete_profile(
+    app: tauri::AppHandle,
     registry: State<'_, ProviderRegistry>,
     engine: State<'_, SharedSearchEngine>,
     name: String,
@@ -98,7 +101,7 @@ pub async fn delete_profile(
     let engine = engine.inner().clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
         archive_provider(&registry, source.as_deref(), true)?.delete_profile(&name)?;
-        crate::services::search::rebuild(&engine, &providers);
+        crate::services::search::rebuild(&engine, &providers, "manual", &app);
         Ok(())
     })
     .await
@@ -107,6 +110,7 @@ pub async fn delete_profile(
 
 #[tauri::command]
 pub async fn rename_profile(
+    app: tauri::AppHandle,
     registry: State<'_, ProviderRegistry>,
     engine: State<'_, SharedSearchEngine>,
     old_name: String,
@@ -119,7 +123,7 @@ pub async fn rename_profile(
     tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
         archive_provider(&registry, source.as_deref(), true)?
             .rename_profile(&old_name, &new_name)?;
-        crate::services::search::rebuild(&engine, &providers);
+        crate::services::search::rebuild(&engine, &providers, "manual", &app);
         Ok(())
     })
     .await

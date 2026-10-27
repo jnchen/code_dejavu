@@ -1,7 +1,7 @@
 # Code Déjà Vu 操作指南
 
-Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI、OpenCode 与 PiAgent 留在本机的
-会话、指令和配置资料。本指南以当前公开版本为准；不同 Agent 支持的功能会略有差异。
+Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI、OpenCode、PiAgent 与
+DeepSeek Harness（dsh）留在本机的会话、指令和配置资料。本指南以当前公开版本为准；不同 Agent 支持的功能会略有差异。
 
 ![Code Déjà Vu 控制台主页](../dashboard_snapshot.png)
 
@@ -20,7 +20,7 @@ Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI、OpenCode �
 前往 [GitHub Releases](https://github.com/jnchen/code_dejavu/releases/latest)：
 
 - `code-dejavu_*_x64-setup.exe`：Windows NSIS 安装包，推荐普通用户使用。
-- `code-dejavu_*_x64_en-US.msi`：Windows MSI 安装包，适合需要 MSI 的场景。
+- `code-dejavu_*_aarch64.dmg`：macOS Apple Silicon 安装包。
 - `SHA256SUMS.txt`：安装包 SHA-256 校验值。
 
 ### 2. 准备本地 Agent 数据
@@ -33,18 +33,21 @@ Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI、OpenCode �
 | Codex CLI | `~/.codex/sessions/` | 会话通常按日期分目录保存 |
 | OpenCode | `~/.local/share/opencode/opencode.db` | 会话保存在 SQLite 数据库中 |
 | PiAgent | `~/.pi/agent/sessions/` | 支持默认目录及已发现项目的自定义 `sessionDir` |
+| DeepSeek Harness | `~/.dsh/sessions/` | 会话按项目分目录；支持多代日志与 `.zstd` 压缩，可用 `DSH_HOME` 重定向 |
 
 `~` 表示当前用户主目录。如果某个 Agent 从未运行、尚未产生会话，或数据目录不在应用支持的
 默认位置，对应来源会显示“未发现本地数据”。
 
 ### 3. 等待首次索引
 
-首次启动后，应用会在后台建立搜索索引。请保持窗口开启，直到控制台的“搜索索引”显示
-“已索引”。索引完成前，会话搜索、用量统计、摘要和最后交互时间可能不完整。
+首次启动后，应用会在后台建立搜索索引，侧边栏底部会显示“索引更新中…”。请保持窗口
+开启，直到提示消失、控制台的“搜索索引”显示“已索引”。索引完成前，会话搜索、用量
+统计、摘要和最后交互时间可能不完整；从缓存恢复旧索引后，后台还会继续对账一次，
+若有新增会话会弹出提示并自动刷新列表。
 
 ## 五分钟上手
 
-1. 打开 **控制台**，确认 Claude Code、Codex CLI、OpenCode 或 PiAgent 至少有一个来源可用。
+1. 打开 **控制台**，确认 Claude Code、Codex CLI、OpenCode、PiAgent 或 DeepSeek Harness 至少有一个来源可用。
 2. 等待搜索索引完成；如果刚产生了新会话，可点击 **刷新**，必要时点击 **重建索引**。
 3. 进入 **会话档案**，选择来源和“当前 / 全部 / 归档”范围。
 4. 打开一条会话，浏览时间线；需要时使用会话内搜索、收藏、置顶、备注或导出。
@@ -69,7 +72,7 @@ Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI、OpenCode �
 
 #### 筛选与搜索
 
-- 顶部来源按钮可切换 Claude Code、Codex CLI、OpenCode、PiAgent 或统一时间线。
+- 顶部来源按钮可切换 Claude Code、Codex CLI、OpenCode、PiAgent、DeepSeek Harness 或统一时间线。
 - **当前**只显示未归档会话，**归档**只显示快照中的会话，**全部**同时显示两者。
 - 可将搜索范围限制为 **对话**、**工具**或**思考**内容。
 - 普通搜索使用本地索引，速度快，但索引会对超大内容做容量限制。
@@ -99,6 +102,18 @@ Code Déjà Vu 用来统一查看和管理 Claude Code、Codex CLI、OpenCode �
 
 支持恢复的当前会话会显示 **恢复会话**。点击后，应用会在该项目目录打开设置中选定的终端，
 并调用对应 Agent CLI 的恢复命令。
+
+默认命令面向各 Agent 的 CLI/TUI（如 `claude --resume`、`codex resume`、`dsh tui --resume`）。
+如果你用的是桌面端或 Web 端，可在 **设置 → 终端与恢复参数** 中为每个 Agent 配置自定义
+恢复命令模板，应用内置了几种预设：
+
+- **Claude Desktop**：`claude --desktop --resume {session}`（官方 CLI 桥接，直达该会话）。
+- **Codex Desktop**：通过 `codex://threads/{session_raw}` 深链直达该会话。
+- **OpenCode Desktop / DSH Web、Desktop**：这两类前端暂无会话级链接，预设只会唤起
+  应用（`opencode://open`、`dsh://open` 或 `dsh web`），打开后需手动选择会话。
+
+模板中的占位符会在恢复时替换：`{session}` / `{session_raw}` 为会话 ID（前者自动加引号），
+`{project}` / `{project_raw}` 为项目路径。留空则回退默认 CLI 命令。
 
 恢复前请确认：
 
@@ -184,6 +199,9 @@ OpenCode 的 `auth.json` / `account.json`。但快照仍可能包含完整会话
 PiAgent 快照覆盖 `~/.pi/agent`（或 `PI_CODING_AGENT_DIR`）内的会话、设置和模型配置。通过
 `sessionDir` 指向该目录之外的自定义会话目录仍可浏览，但暂不随快照归档或清空。
 
+DeepSeek Harness 快照覆盖 `~/.dsh`（或 `$DSH_HOME`）内的会话与配置；凭据和认证文件
+（如 `credentials.json`、`auth.json`）不会写入快照，会尽量保留登录状态。
+
 ### 指令
 
 指令页只管理 Agent 的**全局指令文件**：
@@ -200,6 +218,7 @@ PiAgent 快照覆盖 `~/.pi/agent`（或 `PI_CODING_AGENT_DIR`）内的会话、
 
 - 选择 `PowerShell`、`pwsh`、`cmd`、`bash` 等可用 Shell。
 - 为不同 Agent 配置恢复会话时附加的命令行参数。
+- 为不同 Agent 配置自定义恢复命令模板（含桌面端预设，占位符见“恢复会话”一节）。
 - 配置启动终端时注入的环境变量。
 
 环境变量会保存在本机配置中。虽然界面会隐藏工具配置里的敏感值，仍不建议在这里长期保存
@@ -227,17 +246,22 @@ TOML 语法是否正确。
 
 ## 功能支持概览
 
-| 功能 | Claude Code | Codex CLI | OpenCode | PiAgent |
-| --- | --- | --- | --- | --- |
-| 会话浏览、搜索、恢复 | 支持 | 支持 | 支持 | 支持 |
-| 子代理展示 | 支持 | 支持 | 支持 | 暂不支持 |
-| 指令读写 | 支持 | 支持 | 支持 | 暂不支持 |
-| 规则管理 | 读写 | 只读 | 只读 | 暂不支持 |
-| 记忆管理 | 读写 | 只读，取决于本地数据库 | 暂不支持 | 暂不支持 |
-| 快照归档与恢复 | 支持 | 支持 | 支持 | 支持 Agent 根目录内数据 |
+| 功能 | Claude Code | Codex CLI | OpenCode | PiAgent | DeepSeek Harness |
+| --- | --- | --- | --- | --- | --- |
+| 会话浏览、搜索、恢复 | 支持 | 支持 | 支持 | 支持 | 支持 |
+| 子代理展示 | 支持 | 支持 | 支持 | 暂不支持 | 支持 |
+| 指令读写 | 支持 | 支持 | 支持 | 暂不支持 | 支持（AGENTS.md） |
+| 规则管理 | 读写 | 只读 | 只读 | 暂不支持 | 暂不支持 |
+| 记忆管理 | 读写 | 只读，取决于本地数据库 | 暂不支持 | 暂不支持 | 暂不支持 |
+| 快照归档与恢复 | 支持 | 支持 | 支持 | 支持 Agent 根目录内数据 | 支持 `~/.dsh` 内数据 |
 
 PiAgent 会话是带 `id` / `parentId` 的追加式树。Code Déjà Vu 按文件中的持久化顺序展示
 所有分支，因此切换分支后留下的旧分支内容也不会被隐藏。
+
+DeepSeek Harness 会话按项目存放在 `$DSH_HOME/sessions/`（默认 `~/.dsh/sessions/`），
+每个会话目录内的 `session.jsonl` 是当前一代日志，`session.v2.jsonl` 等是多代历史，
+`.zstd` 后缀为压缩版本，应用会自动选择最新一代（同代优先未压缩）。子代理会话通过
+`parentSession` 关联，可在父会话的工具卡片中逐层展开。
 
 实际能力取决于 Agent 版本和本地数据是否存在；界面会隐藏当前来源不支持的操作。
 
@@ -257,12 +281,13 @@ PiAgent 会话是带 `id` / `parentId` 的追加式树。Code Déjà Vu 按文�
 先确认对应 CLI 在当前系统用户下至少运行过一次，并已生成默认数据目录。Code Déjà Vu 当前
 不会自动搜索任意自定义目录。PiAgent 例外支持 `PI_CODING_AGENT_DIR`、
 `PI_CODING_AGENT_SESSION_DIR`、全局 `settings.json`，以及已发现项目的 `.pi/settings.json`
-中的 `sessionDir`。
+中的 `sessionDir`；DeepSeek Harness 支持 `DSH_HOME` 重定向数据目录。
 
 ### 新会话没有出现
 
-返回控制台点击 **刷新**。如果仍未出现，在控制台或会话页点击 **重建索引**，并保持应用
-开启直到索引完成。
+应用会自动监测会话文件变化并在后台刷新索引，侧边栏出现“索引更新中…”即表示正在刷新，
+完成后列表会自动更新。如果仍未出现，返回控制台点击 **刷新**，或在控制台/会话页点击
+**重建索引**，并保持应用开启直到索引完成。
 
 ### 普通搜索找不到确定存在的内容
 

@@ -19,6 +19,15 @@ const dict: Record<string, { zh: string; en: string }> = {
   "nav.instructions": { zh: "指令", en: "Instructions" },
   "nav.settings": { zh: "设置", en: "Settings" },
   // Sidebar footer
+  "footer.indexBuilding": { zh: "索引更新中…", en: "Indexing…" },
+  "footer.indexBuildingTitle": {
+    zh: "后台正在扫描/更新会话索引，完成后列表会自动刷新",
+    en: "Scanning/updating the session index in the background; lists refresh automatically when it finishes",
+  },
+  "toast.indexUpdated": {
+    zh: "索引已更新：新增 {added} 个会话（共 {n} 个）",
+    en: "Index updated: {added} new sessions ({n} total)",
+  },
   "footer.tagline": { zh: "本机编码档案", en: "Local coding archive" },
   "footer.dark": { zh: "深色模式", en: "Dark mode" },
   "footer.light": { zh: "浅色模式", en: "Light mode" },

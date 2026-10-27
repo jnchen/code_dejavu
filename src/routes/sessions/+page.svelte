@@ -7,6 +7,7 @@
   import { highlightPlain } from "$lib/html";
   import { t } from "$lib/i18n.svelte";
   import { pushToast } from "$lib/toast.svelte";
+  import { indexSync } from "$lib/indexSync.svelte";
   import { deferRouteLoad } from "$lib/defer";
   import type {
     InstructionDetail,
@@ -1236,6 +1237,24 @@
     return modelContextsTitle(session).length > 0;
   }
 
+  // Background index swaps (startup reconcile, disk-change auto refresh, archive ops)
+  // used to be silent: new sessions (e.g. from a newly supported agent) appeared only after a
+  // manual refresh. Reload the list when a fresh index lands — but never yank an open
+  // transcript or clobber an active search; those re-read on their next natural load.
+  let seenIndexVersion = -1;
+  $effect(() => {
+    const version = indexSync.version;
+    if (seenIndexVersion === -1) {
+      seenIndexVersion = version; // pre-mount value: nothing to refresh yet
+      return;
+    }
+    if (version === seenIndexVersion) return;
+    seenIndexVersion = version;
+    if (destroyed || detail || searchQuery.trim() || !source) return;
+    needsIndexRefresh = false;
+    loadSessions();
+  });
+
   async function pollIndexStatus() {
     while (!destroyed) {
       try {
@@ -1526,10 +1545,10 @@ ${rows}
 <svelte:window onpointerdown={onWindowPointerDown} onpointerup={onWindowPointerUp} onpointercancel={onWindowPointerUp} />
 
 <div class="p-6 h-full flex flex-col">
-  <div class="flex items-center gap-3 mb-4 shrink-0">
+  <div class="flex flex-wrap items-center gap-2 mb-3 shrink-0">
     <h2 class="text-lg font-semibold shrink-0">{t("sess.title")}</h2>
     {#if !detail && sessionSources.length > 1}
-      <div class="flex rounded-lg border border-border overflow-hidden shrink-0">
+      <div class="flex flex-wrap rounded-lg border border-border overflow-hidden shrink-0">
         <button
           onclick={() => changeSource(ALL_SOURCES)}
           disabled={!indexReady}
@@ -1568,7 +1587,7 @@ ${rows}
           </button>
         {/each}
       </div>
-      <div class="flex-1 relative">
+      <div class="relative min-w-[220px] flex-1">
         <input
           bind:value={searchQuery}
           oninput={onSearchInput}

@@ -12,7 +12,44 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
+
+/// Announced to every window whenever the shared index starts rebuilding or is swapped in, so
+/// background work (startup reconcile, disk-change auto refresh, WSL adoption) is visible in
+/// the UI instead of silently changing search results minutes later.
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexEvent {
+    /// "building" while the swap is in flight, "ready" once the new index is live.
+    pub phase: &'static str,
+    /// What triggered the work: "startup" | "auto" | "manual".
+    pub origin: &'static str,
+    pub session_count: usize,
+    pub token_count: usize,
+    pub failed_files: usize,
+}
+
+pub const INDEX_EVENT_NAME: &str = "dejavu://index";
+
+fn emit_index_event(app: &AppHandle, phase: &'static str, origin: &'static str, status: &IndexStatus) {
+    let (session_count, token_count, failed_files) = match status {
+        IndexStatus::Ready { session_count, token_count, failed_files } => {
+            (*session_count, *token_count, *failed_files)
+        }
+        IndexStatus::Building => (0, 0, 0),
+    };
+    let _ = app.emit(
+        INDEX_EVENT_NAME,
+        IndexEvent { phase, origin, session_count, token_count, failed_files },
+    );
+}
+
+fn current_status(engine: &SharedSearchEngine) -> IndexStatus {
+    engine
+        .read()
+        .map(|guard| guard.status.clone())
+        .unwrap_or(IndexStatus::Building)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionMeta {
@@ -1262,7 +1299,10 @@ fn try_begin_index_work() -> Option<IndexWorkGuard> {
         .map(|_| IndexWorkGuard)
 }
 
-pub fn build_in_background(providers: Vec<Arc<dyn AgentProvider>>) -> SharedSearchEngine {
+pub fn build_in_background(
+    app: AppHandle,
+    providers: Vec<Arc<dyn AgentProvider>>,
+) -> SharedSearchEngine {
     let jieba = Arc::new(Jieba::new());
     let engine = Arc::new(RwLock::new(SearchEngine {
         sessions: Arc::new(Vec::new()),
@@ -1280,11 +1320,17 @@ pub fn build_in_background(providers: Vec<Arc<dyn AgentProvider>>) -> SharedSear
             remove_legacy_cache();
             // 1. Instant availability: if a persisted index exists, load it so search / usage /
             //    dashboard work immediately on launch instead of waiting for a full disk scan.
+            //    Both announces are deliberate: the cache is only a snapshot, and the reconcile
+            //    in step 2 may still add whole sources (e.g. a newly installed agent) later.
             if let Some(sessions) = load_cached_sessions() {
                 let built = SearchEngine::from_sessions(jieba.clone(), sessions, 0);
                 if let Ok(mut guard) = engine_clone.write() {
                     *guard = built;
                 }
+                emit_index_event(&app, "ready", "startup", &current_status(&engine_clone));
+                emit_index_event(&app, "building", "startup", &IndexStatus::Building);
+            } else {
+                emit_index_event(&app, "building", "startup", &IndexStatus::Building);
             }
             // 2. Reconcile against disk incrementally: with no cache this parses everything (cold
             //    start); with a cache it only re-parses sessions that changed since last run.
@@ -1299,6 +1345,7 @@ pub fn build_in_background(providers: Vec<Arc<dyn AgentProvider>>) -> SharedSear
             if let Ok(mut guard) = engine_clone.write() {
                 *guard = built;
             }
+            emit_index_event(&app, "ready", "startup", &current_status(&engine_clone));
         });
     });
 
@@ -1307,13 +1354,19 @@ pub fn build_in_background(providers: Vec<Arc<dyn AgentProvider>>) -> SharedSear
 
 /// Full, from-scratch rebuild in place (the explicit "rebuild index" action). Ignores the cache to
 /// recover from any drift, then re-persists the fresh index.
-pub fn rebuild(engine: &SharedSearchEngine, providers: &[Arc<dyn AgentProvider>]) -> bool {
+pub fn rebuild(
+    engine: &SharedSearchEngine,
+    providers: &[Arc<dyn AgentProvider>],
+    origin: &'static str,
+    app: &AppHandle,
+) -> bool {
     let Some(_work_guard) = try_begin_index_work() else {
         return false;
     };
     if let Ok(mut guard) = engine.write() {
         guard.status = IndexStatus::Building;
     }
+    emit_index_event(app, "building", origin, &IndexStatus::Building);
     index_pool().install(|| {
         let jieba = Arc::new(Jieba::new());
         let (sessions, failed) = build_sessions_full(&jieba, providers);
@@ -1322,6 +1375,7 @@ pub fn rebuild(engine: &SharedSearchEngine, providers: &[Arc<dyn AgentProvider>]
         if let Ok(mut guard) = engine.write() {
             *guard = built;
         }
+        emit_index_event(app, "ready", origin, &current_status(engine));
     });
     true
 }
@@ -1382,7 +1436,11 @@ const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(8);
 const MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(64);
 const WRITE_SETTLE_WINDOW: Duration = Duration::from_secs(16);
 
-pub fn spawn_auto_refresh(engine: SharedSearchEngine, providers: Vec<Arc<dyn AgentProvider>>) {
+pub fn spawn_auto_refresh(
+    app: AppHandle,
+    engine: SharedSearchEngine,
+    providers: Vec<Arc<dyn AgentProvider>>,
+) {
     // Not "are there roots now?" — a provider can gain roots after startup (a WSL install is
     // adopted once discovery finishes), and a machine whose agents all live in WSL has none at
     // this point. Giving up here would leave exactly that machine without auto-refresh.
@@ -1422,6 +1480,7 @@ pub fn spawn_auto_refresh(engine: SharedSearchEngine, providers: Vec<Arc<dyn Age
             let Some(_work_guard) = try_begin_index_work() else {
                 continue;
             };
+            emit_index_event(&app, "building", "auto", &IndexStatus::Building);
             // Incremental: reuse unchanged sessions, re-parse only what changed on disk (vs the old
             // behavior of re-reading & re-parsing every session file on any change).
             let Ok((jieba, snapshot)) = engine
@@ -1443,6 +1502,7 @@ pub fn spawn_auto_refresh(engine: SharedSearchEngine, providers: Vec<Arc<dyn Age
             if let Ok(mut guard) = engine.write() {
                 *guard = built;
             }
+            emit_index_event(&app, "ready", "auto", &current_status(&engine));
             last = roots_fingerprint(&providers);
             pending_change = None;
         }

@@ -244,6 +244,57 @@ test("deep search and detail pagination work", async ({ page }) => {
   expect(calls.filter((cmd) => cmd === "get_session_detail").length).toBeGreaterThan(1);
 });
 
+test("background index updates show a spinner, toast and auto-refresh the list", async ({ page }) => {
+  await page.goto("/sessions");
+  await expect(page.getByText("共 1 个会话")).toBeVisible();
+
+  const emitIndex = (payload: Record<string, unknown>) =>
+    page.evaluate((value) => {
+      (
+        window as unknown as {
+          __E2E_EMIT_INDEX__?: (payload: Record<string, unknown>) => void;
+        }
+      ).__E2E_EMIT_INDEX__?.(value);
+    }, payload);
+
+  // First ready event mirrors the startup cache restore: baseline, no toast yet.
+  await emitIndex({ phase: "ready", origin: "startup", session_count: 3, token_count: 10, failed_files: 0 });
+  // Reconcile kicks in: sidebar announces background work...
+  await emitIndex({ phase: "building", origin: "startup", session_count: 0, token_count: 0, failed_files: 0 });
+  await expect(page.getByText("索引更新中…")).toBeVisible();
+
+  const before = await page.evaluate(
+    () =>
+      (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__.filter(
+        (cmd) => cmd === "browse_sessions",
+      ).length,
+  );
+  // ...and lands: growth toasts, and the visible list reloads by itself.
+  await emitIndex({ phase: "ready", origin: "startup", session_count: 5, token_count: 20, failed_files: 0 });
+  await expect(page.getByText("索引已更新：新增 2 个会话（共 5 个）")).toBeVisible();
+  await expect(page.getByText("索引更新中…")).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__.filter(
+            (cmd) => cmd === "browse_sessions",
+          ).length,
+      ),
+    )
+    .toBeGreaterThan(before);
+});
+
+test("session search box keeps a readable width at the default window size", async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 640 });
+  await page.goto("/sessions");
+  await expect(page.getByText("共 1 个会话")).toBeVisible();
+
+  const box = await page.getByPlaceholder("搜索当前会话").boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.width).toBeGreaterThanOrEqual(200);
+});
+
 test("WSL host badge and path are rendered for a non-native session", async ({ page }) => {
   await page.goto("/sessions");
   await page.getByRole("button", { name: "OpenCode" }).click();
