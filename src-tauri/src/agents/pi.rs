@@ -933,6 +933,7 @@ impl PiProvider {
             subagent_count: 0,
             archive_name: None,
             model_contexts: meta.model_contexts,
+            is_side_chat: false,
         }
     }
 

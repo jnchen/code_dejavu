@@ -295,6 +295,33 @@ test("session search box keeps a readable width at the default window size", asy
   expect(box!.width).toBeGreaterThanOrEqual(200);
 });
 
+test("a Codex side conversation is shown apart from the session history", async ({ page }) => {
+  await page.goto("/sessions");
+  await page.getByRole("button", { name: "Codex" }).click();
+  await page.getByText("Codex 隔离会话").first().click();
+
+  // Side conversations are their own section, not part of the subagent count.
+  await expect(page.getByText("旁路问答")).toBeVisible();
+  await expect(page.getByText("通过 /side 或 /btw 发起，不属于该会话的对话历史")).toBeVisible();
+  await expect(page.getByText(/个子代理/)).toHaveCount(0);
+
+  await page.getByRole("button", { name: /命名约定是什么？/ }).click();
+  await expect(page.getByText(/旁路会话：继承主会话上下文/)).toBeVisible();
+  await expect(page.getByText("沿用现有的 camelCase 到 snake_case 映射约定。")).toBeVisible();
+
+  const calls = await page.evaluate(
+    () => (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__,
+  );
+  expect(calls).toContain("get_subagent_detail");
+});
+
+test("an orphaned side conversation stays listed with a badge", async ({ page }) => {
+  await page.goto("/sessions");
+  await page.getByRole("button", { name: "Codex" }).click();
+  await expect(page.getByText("旁路问题：配置文件在哪？")).toBeVisible();
+  await expect(page.getByText("旁路", { exact: true })).toBeVisible();
+});
+
 test("WSL host badge and path are rendered for a non-native session", async ({ page }) => {
   await page.goto("/sessions");
   await page.getByRole("button", { name: "OpenCode" }).click();

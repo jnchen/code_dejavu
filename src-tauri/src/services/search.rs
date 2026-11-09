@@ -1258,6 +1258,7 @@ fn to_summary(meta: &SessionMeta) -> SessionSummary {
         subagent_count: meta.subagent_count,
         archive_name: meta.archive_name.clone(),
         model_contexts: meta.model_contexts.clone(),
+        is_side_chat: false,
     }
 }
 

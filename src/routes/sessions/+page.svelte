@@ -453,6 +453,9 @@
     selectedProcessPid = null;
     processDialogOpen = false;
     processError = "";
+    openSideChatId = null;
+    sideChatRecords = [];
+    sideChatError = "";
     detail = { session: s, records: [], hasMore: true, nextByteOffset: 0, headByteOffset: 0, hasEarlier: false, subagents: [], tailMode: false };
     const request = beginDetailRequest(s, level);
     try {
@@ -822,6 +825,46 @@
 
 
   let activeHighlight = $derived(detailSearch || searchQuery);
+
+  // Saved side conversations (/side, /btw) arrive through list_subagents but are not agents:
+  // they have no tool card in the timeline and their turns are not part of the session history.
+  let sideChats = $derived((detail?.subagents ?? []).filter((a) => a.kind === "side"));
+  let agentSubagents = $derived((detail?.subagents ?? []).filter((a) => a.kind !== "side"));
+  let openSideChatId = $state<string | null>(null);
+  let sideChatRecords = $state<SessionRecord[]>([]);
+  let sideChatLoading = $state(false);
+  let sideChatError = $state("");
+
+  async function toggleSideChat(side: SubagentInfo) {
+    if (openSideChatId === side.agent_id) {
+      openSideChatId = null;
+      sideChatRecords = [];
+      return;
+    }
+    if (!detail) return;
+    const session = detail.session;
+    openSideChatId = side.agent_id;
+    sideChatRecords = [];
+    sideChatError = "";
+    sideChatLoading = true;
+    try {
+      const page = await api.sessions.getSubagentDetail(
+        session.project,
+        session.session_id,
+        side.agent_id,
+        0,
+        100,
+        session.archive_name,
+        session.source,
+      );
+      if (!detail || openSideChatId !== side.agent_id) return;
+      sideChatRecords = page.records;
+    } catch (e) {
+      if (openSideChatId === side.agent_id) sideChatError = String(e);
+    } finally {
+      if (openSideChatId === side.agent_id) sideChatLoading = false;
+    }
+  }
 
   function formatSize(bytes: number): string {
     if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
@@ -1721,7 +1764,7 @@ ${rows}
           {#if createdTime(detail.session)}<span>{t("sess.createdAt")} {createdTime(detail.session)}</span>{/if}
           {#if updatedTime(detail.session)}<span>{t("sess.updatedAt")} {updatedTime(detail.session)}</span>{/if}
           <span>{formatSize(detail.session.file_size_bytes)}</span>
-          {#if detail.subagents.length > 0} · {t("sess.subagentsN", { n: detail.subagents.length })}{/if}
+          {#if agentSubagents.length > 0} · {t("sess.subagentsN", { n: agentSubagents.length })}{/if}
           {#if detail.hasEarlier} · <span class="text-text-muted">{t("sess.tailLoaded")}</span>{/if}
         </div>
       </div>
@@ -1798,6 +1841,51 @@ ${rows}
         {/if}
       </div>
     </div>
+
+    {#if sideChats.length > 0}
+      <div class="bg-bg-secondary border border-border rounded-xl p-3 mb-3 shrink-0">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex min-w-0 items-center gap-2">
+            <span class="text-[11px] font-medium">💬 {t("sess.sideChats")}</span>
+            <span class="truncate text-[10px] text-text-muted">{t("sess.sideChatsHint")}</span>
+          </div>
+          <span class="shrink-0 text-[10px] text-text-muted">{sideChats.length}</span>
+        </div>
+        <div class="mt-2 space-y-1.5">
+          {#each sideChats as side (side.agent_id)}
+            <div class="rounded-lg border border-border bg-bg">
+              <button
+                onclick={() => toggleSideChat(side)}
+                class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left"
+                aria-expanded={openSideChatId === side.agent_id}
+              >
+                <span class="shrink-0 text-[9px] text-text-muted">{openSideChatId === side.agent_id ? "▾" : "▸"}</span>
+                <span class="min-w-0 flex-1 truncate text-[11px]" title={side.description}>
+                  {side.description || side.agent_id.slice(0, 8)}
+                </span>
+                {#if side.parent_agent_id}
+                  <span class="shrink-0 rounded bg-bg-tertiary px-1.5 py-0.5 text-[9px] text-text-muted">{t("sess.sideChatFromAgent")}</span>
+                {/if}
+              </button>
+              {#if openSideChatId === side.agent_id}
+                <div class="border-t border-border px-2 py-2">
+                  <p class="mb-2 rounded border border-border bg-bg-secondary px-2 py-1 text-[10px] text-text-muted">
+                    {t("sess.sideChatNotice")}
+                  </p>
+                  {#if sideChatError}
+                    <div class="rounded-lg border border-danger/30 bg-danger-dim p-2 text-xs text-danger">{sideChatError}</div>
+                  {:else if sideChatLoading}
+                    <p class="text-[11px] text-text-secondary">{t("common.loading")}</p>
+                  {:else}
+                    <Timeline records={sideChatRecords} highlight={activeHighlight} session={detail.session} subagents={[]} />
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     {#if metaPanelOpen}
       <div class="bg-bg-secondary border border-border rounded-xl p-4 mb-3 shrink-0">
@@ -2091,7 +2179,7 @@ ${rows}
       {#if loadingDetail && detail.hasEarlier}
         <div class="text-center text-xs text-text-muted py-2">{t("common.loading")}</div>
       {/if}
-      <Timeline records={detail.records} highlight={activeHighlight} session={detail.session} subagents={detail.subagents} />
+      <Timeline records={detail.records} highlight={activeHighlight} session={detail.session} subagents={agentSubagents} />
 
       {#if loadingDetail && detail.hasMore}
         <div class="text-center text-xs text-text-muted py-2">{t("common.loading")}</div>
@@ -2150,6 +2238,9 @@ ${rows}
               {/if}
               {#if s.archive_name}
                 <span class="px-1.5 py-0.5 bg-warning-dim text-warning rounded text-[9px]">{t("sess.archivedLabel", { name: s.archive_name })}</span>
+              {/if}
+              {#if s.is_side_chat}
+                <span class="px-1.5 py-0.5 bg-accent-dim text-accent rounded text-[9px]" title={t("sess.sideChatOrphanHint")}>{t("sess.sideChatBadge")}</span>
               {/if}
               {#if hostLabel(s)}
                 <span class="px-1.5 py-0.5 bg-bg-tertiary text-text-muted rounded text-[9px]" title={s.project_path}>{hostLabel(s)}</span>

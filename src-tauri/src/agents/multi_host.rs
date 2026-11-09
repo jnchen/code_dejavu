@@ -618,6 +618,7 @@ mod tests {
             subagent_count: 0,
             archive_name: archive.map(str::to_string),
             model_contexts: Vec::new(),
+            is_side_chat: false,
         }
     }
 

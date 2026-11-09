@@ -514,6 +514,7 @@ impl OpenCodeProvider {
                 subagent_count: *child_counts.get(&id).unwrap_or(&0) as u32,
                 archive_name: archive_name.clone(),
                 model_contexts: model_contexts.get(&id).cloned().unwrap_or_default(),
+                is_side_chat: false,
             });
         }
         Ok(out)
@@ -592,6 +593,7 @@ impl OpenCodeProvider {
                 subagent_count: *child_counts.get(&id).unwrap_or(&0) as u32,
                 archive_name: archive_name.clone(),
                 model_contexts: model_contexts.get(&id).cloned().unwrap_or_default(),
+                is_side_chat: false,
             });
         }
         Ok(out)
@@ -1299,6 +1301,7 @@ impl OpenCodeProvider {
                 tool_use_id,
                 record_count: *mc.get(&id).unwrap_or(&0) as u32,
                 parent_agent_id: None,
+                kind: None,
             });
         }
         Ok(out)
@@ -1450,6 +1453,7 @@ impl OpenCodeProvider {
                 // Direct children spawn from the requested session; a nested agent reports its
                 // immediate parent agent so the UI can indent it if it ever wants to.
                 parent_agent_id: parent_id.filter(|parent| parent != session_id),
+                kind: None,
             });
         }
         Ok(out)

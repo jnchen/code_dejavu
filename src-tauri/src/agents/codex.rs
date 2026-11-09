@@ -154,6 +154,12 @@ struct CodexRolloutMeta {
     /// Direct parent thread. This differs from `logical_session_id` for nested subagents.
     parent_thread_id: Option<String>,
     is_subagent: bool,
+    /// A saved side conversation (`/side`, `/btw`). Codex forks these into their own rollout with
+    /// `attached_thread` set and source `tui_side_chat`; they carry inherited history by reference
+    /// and are not part of the main thread.
+    is_side_chat: bool,
+    /// Thread this side conversation was forked from.
+    side_parent_id: Option<String>,
     cwd: String,
     started: Option<String>,
     model_contexts: Vec<SessionModelInfo>,
@@ -174,6 +180,10 @@ struct RolloutEntry {
 struct RolloutGroup {
     root: RolloutEntry,
     descendants: Vec<RolloutEntry>,
+    /// Saved side conversations forked from this session. They belong to the session but are not
+    /// part of its history, so they are kept out of `members()` (size, models, index version) and
+    /// surfaced separately in the UI.
+    side_chats: Vec<RolloutEntry>,
 }
 
 impl RolloutGroup {
@@ -371,6 +381,22 @@ impl CodexProvider {
                         || logical_session_id
                             .as_deref()
                             .is_some_and(|root| root != thread_id);
+                    // Codex persists an attached side conversation as its own rollout: a fork of
+                    // the parent thread that sets `attached_thread` and uses the TUI side-chat
+                    // source. Reading it as an ordinary session showed a second copy of the
+                    // parent's turns in the list, so classify it before anything else uses it.
+                    let is_side_chat = pl
+                        .get("attached_thread")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        || clean_field("source").as_deref() == Some("tui_side_chat");
+                    let is_subagent = is_subagent && !is_side_chat;
+                    let side_parent_id = is_side_chat
+                        .then(|| {
+                            clean_field("forked_from_id")
+                                .or_else(|| clean_field("parent_thread_id"))
+                        })
+                        .flatten();
                     // A normal user-created fork can carry `forked_from_id`. It becomes a parent
                     // fallback only after independent metadata has established this is a subagent.
                     if is_subagent && parent_thread_id.is_none() {
@@ -390,6 +416,8 @@ impl CodexProvider {
                         logical_session_id,
                         parent_thread_id,
                         is_subagent,
+                        is_side_chat,
+                        side_parent_id,
                         cwd: clean_field("cwd").unwrap_or_default(),
                         started,
                         model_contexts: Vec::new(),
@@ -530,7 +558,17 @@ impl CodexProvider {
         }
 
         let mut members_by_root: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut side_by_root: HashMap<usize, Vec<usize>> = HashMap::new();
         for index in 0..entries.len() {
+            // A side conversation is attached to the session it was forked from instead of
+            // becoming a root of its own. Without a resolvable parent it stays a normal root, so
+            // an orphaned side chat remains visible (badged) rather than disappearing.
+            if entries[index].meta.is_side_chat {
+                if let Some(root) = Self::resolve_side_chat_root(index, &entries, &by_thread) {
+                    side_by_root.entry(root).or_default().push(index);
+                    continue;
+                }
+            }
             let root = Self::resolve_root_index(index, &entries, &by_thread);
             members_by_root.entry(root).or_default().push(index);
         }
@@ -548,12 +586,40 @@ impl CodexProvider {
                     .cmp(&b.meta.started)
                     .then_with(|| a.meta.thread_id.cmp(&b.meta.thread_id))
             });
+            let mut side_chats: Vec<RolloutEntry> = side_by_root
+                .remove(&root_index)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|index| entries[index].clone())
+                .collect();
+            side_chats.sort_by(|a, b| {
+                a.meta
+                    .started
+                    .cmp(&b.meta.started)
+                    .then_with(|| a.meta.thread_id.cmp(&b.meta.thread_id))
+            });
             groups.push(RolloutGroup {
                 root: entries[root_index].clone(),
                 descendants,
+                side_chats,
             });
         }
         groups
+    }
+
+    /// Resolve the root session a side conversation belongs to, or None when it is orphaned
+    /// (parent rollout deleted, self-reference, or a chain of side conversations).
+    fn resolve_side_chat_root(
+        start: usize,
+        entries: &[RolloutEntry],
+        by_thread: &HashMap<String, usize>,
+    ) -> Option<usize> {
+        let parent_id = entries[start].meta.side_parent_id.as_deref()?;
+        let &parent_index = by_thread.get(parent_id)?;
+        if parent_index == start || entries[parent_index].meta.is_side_chat {
+            return None;
+        }
+        Some(Self::resolve_root_index(parent_index, entries, by_thread))
     }
 
     fn rollout_groups_in(root: &Path) -> Vec<RolloutGroup> {
@@ -702,7 +768,9 @@ impl CodexProvider {
         }
         let path = self.session_file(agent_id, archive)?;
         let meta = Self::read_meta_fast(&path)?;
-        if !meta.is_subagent || meta.thread_id == session_id {
+        // Side conversations are forked threads too, but they are not `is_subagent`; both kinds
+        // must resolve back to the session that owns them.
+        if !(meta.is_subagent || meta.is_side_chat) || meta.thread_id == session_id {
             return None;
         }
         (self.resolved_root_thread(meta, archive)?.as_str() == session_id).then_some(path)
@@ -720,6 +788,22 @@ impl CodexProvider {
         loop {
             if !seen.insert(current.thread_id.clone()) {
                 return Some(original);
+            }
+            // A side conversation belongs to the thread it was forked from, so it resolves to that
+            // thread's root instead of standing in as a root itself.
+            if current.is_side_chat {
+                let Some(parent_id) = current.side_parent_id.as_deref() else {
+                    return Some(original);
+                };
+                let Some(parent_path) = self.session_file(parent_id, archive) else {
+                    return Some(original);
+                };
+                let Some(parent_meta) = Self::read_meta_fast(&parent_path) else {
+                    return Some(original);
+                };
+                highest_existing = parent_meta.thread_id.clone();
+                current = parent_meta;
+                continue;
             }
             if !current.is_subagent {
                 return Some(current.thread_id);
@@ -1168,6 +1252,41 @@ impl CodexProvider {
         root_doc.version = group.composite_version();
         (Some(root_doc), failed)
     }
+
+    /// First real user prompt in a rollout file. Injected env/permission context starts with `<`
+    /// and is skipped, and a side conversation's inherited-history boundary is a developer turn.
+    fn first_user_message_in(path: &Path) -> Option<String> {
+        let file = File::open(path).ok()?;
+        let reader = BufReader::with_capacity(64 * 1024, file);
+        for line in reader.lines().map_while(Result::ok) {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if v.get("type").and_then(|t| t.as_str()) != Some("response_item") {
+                continue;
+            }
+            let pl = v.get("payload");
+            if pl.and_then(|p| p.get("type")).and_then(|t| t.as_str()) != Some("message") {
+                continue;
+            }
+            if pl.and_then(|p| p.get("role")).and_then(|r| r.as_str()) != Some("user") {
+                continue;
+            }
+            let text = join_text(pl.and_then(|p| p.get("content")));
+            // `/side` and `/btw` are commands, not the question the user asked.
+            let trimmed = text.trim_start();
+            let trimmed = trimmed
+                .strip_prefix("/side")
+                .or_else(|| trimmed.strip_prefix("/btw"))
+                .map(str::trim_start)
+                .unwrap_or(trimmed);
+            if trimmed.is_empty() || trimmed.starts_with('<') {
+                continue; // injected env/permissions context, not a real prompt
+            }
+            return Some(trimmed.chars().take(200).collect());
+        }
+        None
+    }
 }
 
 impl AgentProvider for CodexProvider {
@@ -1287,6 +1406,7 @@ impl AgentProvider for CodexProvider {
                 subagent_count: group.descendants.len().min(u32::MAX as usize) as u32,
                 archive_name: None,
                 model_contexts: group.model_contexts(),
+                is_side_chat: group.root.meta.is_side_chat,
             });
         }
         sessions.sort_by(|a, b| {
@@ -1543,30 +1663,7 @@ impl AgentProvider for CodexProvider {
         archive: Option<&str>,
     ) -> Option<String> {
         let path = self.session_file(session_id, archive)?;
-        let file = File::open(&path).ok()?;
-        let reader = BufReader::with_capacity(64 * 1024, file);
-        for line in reader.lines().map_while(Result::ok) {
-            let Ok(v) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            if v.get("type").and_then(|t| t.as_str()) != Some("response_item") {
-                continue;
-            }
-            let pl = v.get("payload");
-            if pl.and_then(|p| p.get("type")).and_then(|t| t.as_str()) != Some("message") {
-                continue;
-            }
-            if pl.and_then(|p| p.get("role")).and_then(|r| r.as_str()) != Some("user") {
-                continue;
-            }
-            let text = join_text(pl.and_then(|p| p.get("content")));
-            let trimmed = text.trim_start();
-            if trimmed.is_empty() || trimmed.starts_with('<') {
-                continue; // injected env/permissions context, not a real prompt
-            }
-            return Some(text.chars().take(200).collect());
-        }
-        None
+        Self::first_user_message_in(&path)
     }
 
     fn session_detail(
@@ -1686,6 +1783,25 @@ impl AgentProvider for CodexProvider {
                     .parent_thread_id
                     .clone()
                     .filter(|parent| parent != session_id),
+                kind: None,
+            });
+        }
+        // Saved side conversations are returned through the same call but tagged, so the UI can
+        // render them as side Q&A instead of as delegated agents with tool cards.
+        for side in &group.side_chats {
+            out.push(SubagentInfo {
+                agent_id: side.meta.thread_id.clone(),
+                agent_type: "side".to_string(),
+                description: Self::first_user_message_in(&side.path)
+                    .unwrap_or_else(|| side.meta.thread_id.clone()),
+                tool_use_id: String::new(),
+                record_count: 0,
+                parent_agent_id: side
+                    .meta
+                    .side_parent_id
+                    .clone()
+                    .filter(|parent| parent != session_id),
+                kind: Some("side".to_string()),
             });
         }
         Ok(out)
@@ -2349,6 +2465,68 @@ mod tests {
         let meta = meta.expect("meta");
         assert_eq!(meta["terminal"]["exit_code"], json!(0));
         assert_eq!(meta["terminal"]["duration_ms"], json!(1500));
+    }
+
+    fn side_chat_meta(id: &str, parent: &str) -> Value {
+        session_meta(json!({
+            "id": id,
+            "cwd": "C:/repo",
+            "source": "tui_side_chat",
+            "attached_thread": true,
+            "forked_from_id": parent
+        }))
+    }
+
+    fn user_message(text: &str) -> Value {
+        json!({
+            "type": "response_item",
+            "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}
+        })
+    }
+
+    #[test]
+    fn side_conversation_is_not_a_top_level_session() {
+        let dir = TempRolloutDir::new();
+        dir.write("root", &[root_meta("root")]);
+        // An attached /side (or /btw) rollout is persisted as a fork of the parent thread.
+        dir.write(
+            "side",
+            &[side_chat_meta("side", "root"), user_message("/btw where is the config?")],
+        );
+
+        let groups = CodexProvider::rollout_groups_in(&dir.path);
+        assert_eq!(groups.len(), 1, "side chats must not become their own session");
+        assert_eq!(groups[0].root.meta.thread_id, "root");
+        assert_eq!(groups[0].side_chats.len(), 1);
+        assert_eq!(groups[0].side_chats[0].meta.thread_id, "side");
+        assert!(groups[0].descendants.is_empty(), "a side chat is not a subagent");
+        // Size and index version ignore side chats: they are not part of the session body.
+        assert_eq!(groups[0].members().count(), 1);
+    }
+
+    #[test]
+    fn orphaned_side_conversation_stays_visible() {
+        let dir = TempRolloutDir::new();
+        // The parent rollout is gone (deleted or archived away): the side chat must not be hidden.
+        dir.write("side", &[side_chat_meta("side", "missing-parent")]);
+
+        let groups = CodexProvider::rollout_groups_in(&dir.path);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].root.meta.thread_id, "side");
+        assert!(groups[0].root.meta.is_side_chat);
+    }
+
+    #[test]
+    fn side_conversation_title_skips_the_command_word() {
+        let dir = TempRolloutDir::new();
+        let path = dir.write(
+            "side",
+            &[side_chat_meta("side", "root"), user_message("/btw 命名约定是什么？")],
+        );
+        assert_eq!(
+            CodexProvider::first_user_message_in(&path).as_deref(),
+            Some("命名约定是什么？")
+        );
     }
 
     #[test]

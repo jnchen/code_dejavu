@@ -108,6 +108,33 @@ const nestedSubagent: SubagentInfo = {
   parent_agent_id: "agent-demo-1",
 };
 
+// A saved Codex side conversation (/side, /btw): persisted as a forked rollout, surfaced through
+// list_subagents but tagged so the UI keeps it out of the subagent count and timeline.
+const sideChat: SubagentInfo = {
+  agent_id: "side-demo-1",
+  agent_type: "side",
+  description: "命名约定是什么？",
+  tool_use_id: "",
+  record_count: 0,
+  kind: "side",
+};
+
+// Its parent rollout is gone, so the backend lists it as a top-level session with a badge.
+const orphanSideSession: SessionSummary = {
+  source: "codex",
+  session_id: "codex-side-orphan",
+  project: "C--Codes-demo",
+  project_path: "C:\Codes\demo",
+  first_prompt: "旁路问题：配置文件在哪？",
+  agent_title: "旁路问题：配置文件在哪？",
+  created_at: "2026-10-21 13:00:00",
+  updated_at: "2026-10-21 13:00:05",
+  timestamp: "2026-10-21 13:00:05",
+  file_size_bytes: 256,
+  subagent_count: 0,
+  is_side_chat: true,
+};
+
 const records: SessionRecord[] = [
   {
     record_type: "user",
@@ -236,6 +263,37 @@ const nestedSubagentPage: PaginatedRecords = {
   has_earlier: false,
 };
 
+const sideChatPage: PaginatedRecords = {
+  records: [
+    {
+      record_type: "user",
+      content_preview: "命名约定是什么？",
+      timestamp: "2026-10-21 13:00:01",
+      tool_name: null,
+      tool_use_id: null,
+      tool_input: null,
+      diff: null,
+      level: "content",
+      byte_offset: 0,
+    },
+    {
+      record_type: "assistant",
+      content_preview: "沿用现有的 camelCase 到 snake_case 映射约定。",
+      timestamp: "2026-10-21 13:00:02",
+      tool_name: null,
+      tool_use_id: null,
+      tool_input: null,
+      diff: null,
+      level: "content",
+      byte_offset: 1,
+    },
+  ],
+  start_byte_offset: 0,
+  next_byte_offset: 2,
+  has_more: false,
+  has_earlier: false,
+};
+
 const dashboard: DashboardSummary = {
   total_sessions: 3,
   recent: [session],
@@ -279,6 +337,9 @@ export async function installMockTauri(page: Page): Promise<void> {
         nestedSubagentPage: unknown;
         dashboard: unknown;
         indexStatus: unknown;
+        sideChat: unknown;
+        orphanSideSession: unknown;
+        sideChatPage: unknown;
       };
       const calls: string[] = [];
       (window as unknown as { __E2E_CALLS__: string[] }).__E2E_CALLS__ = calls;
@@ -355,7 +416,7 @@ export async function installMockTauri(page: Page): Promise<void> {
       };
 
       const bySource = (source: unknown) => {
-        if (source === "codex") return [fixtures.codexSession];
+        if (source === "codex") return [fixtures.codexSession, fixtures.orphanSideSession];
         if (source === "opencode") return [fixtures.wslSession];
         if (source === "dsh") return [fixtures.dshSession];
         return [fixtures.session];
@@ -385,9 +446,16 @@ export async function installMockTauri(page: Page): Promise<void> {
         get_session_before: () => fixtures.detail,
         list_session_processes: (args) => (args.source === "codex" ? processes : []),
         stop_session_process: () => null,
-        list_subagents: () => [fixtures.subagent, fixtures.nestedSubagent],
-        get_subagent_detail: (args) =>
-          args.agentId === "agent-demo-2" ? fixtures.nestedSubagentPage : fixtures.subagentPage,
+        list_subagents: (args) =>
+          args.source === "codex"
+            ? [fixtures.sideChat]
+            : [fixtures.subagent, fixtures.nestedSubagent],
+        get_subagent_detail: (args) => {
+          if (args.agentId === "side-demo-1") return fixtures.sideChatPage;
+          return args.agentId === "agent-demo-2"
+            ? fixtures.nestedSubagentPage
+            : fixtures.subagentPage;
+        },
         "plugin:updater|check": () => updateMetadata,
         list_profiles: () => profiles,
         create_profile: () => {
@@ -519,6 +587,9 @@ export async function installMockTauri(page: Page): Promise<void> {
       nestedSubagentPage,
       dashboard,
       indexStatus,
+      sideChat,
+      orphanSideSession,
+      sideChatPage,
     },
   );
 }

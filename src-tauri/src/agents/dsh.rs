@@ -371,6 +371,7 @@ impl DshProvider {
             subagent_count: Self::count_children(sessions, &session.id),
             archive_name: session.archive_name.clone(),
             model_contexts: Vec::new(),
+            is_side_chat: false,
         }
     }
 
@@ -1183,6 +1184,7 @@ impl AgentProvider for DshProvider {
                     .parent_session
                     .clone()
                     .filter(|parent| parent != session_id),
+                kind: None,
             });
         }
         Ok(out)

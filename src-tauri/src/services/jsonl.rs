@@ -148,6 +148,7 @@ pub fn read_claude_session_summary_fast(
         subagent_count,
         archive_name: None,
         model_contexts,
+        is_side_chat: false,
     })
 }
 
@@ -1177,6 +1178,7 @@ pub fn list_claude_subagents(session_dir: &Path) -> Result<Vec<SubagentInfo>, Ap
                         parent_agent_id: meta
                             .parent_agent_id
                             .filter(|parent| !parent.trim().is_empty()),
+                        kind: None,
                     });
                 }
             }

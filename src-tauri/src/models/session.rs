@@ -74,6 +74,10 @@ pub struct SessionSummary {
     pub archive_name: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_contexts: Vec<SessionModelInfo>,
+    /// True only for an orphaned side conversation: one whose parent session no longer exists.
+    /// Attached side conversations are listed under their parent, never as top-level sessions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_side_chat: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -215,6 +219,10 @@ pub struct SubagentInfo {
     /// children of the session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<String>,
+    /// "side" for a saved side conversation (`/side`, `/btw`). None means a subagent, which keeps
+    /// older payloads and every provider that has no side-chat concept unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -47,6 +47,31 @@ The backend `Capabilities` struct uses only verb-based flags (`sessions_read`, `
 `instructions_read`, `instructions_write`, `archive_read`, `archive_write`). Do not add broad
 category booleans such as `rules` or `can_resume`; those make weak providers ambiguous.
 
+## Data Boundary
+
+Code Dejavu is a **reader of persisted, documented local formats**. It is not a session recorder.
+That boundary is architectural, not a temporary limitation:
+
+- A provider may only surface artifacts that the agent has written to disk in a format its vendor
+  documents or that its shipped code writes. Nothing is inferred from a running process.
+- In-memory state, terminal overlays, private extension stores, and IPC traffic are out of scope.
+  Reading them would require attaching to a live process or reverse-engineering private storage,
+  which breaks both the "local files only" promise and the read-only security model.
+- A missing capability is reported honestly. Do not fabricate an empty artifact or a placeholder
+  UI for data that was never persisted.
+
+Two concrete consequences:
+
+- Claude Code `/btw` side questions live in a terminal overlay that is discarded when the process
+  exits ("the question and answer never enter the conversation history"), so no provider can show
+  them. The VS Code extension keeps its own thread in a private store; that is equally out of
+  scope. `sessions.read` intentionally has no side-question surface for Claude Code.
+- Codex `/side` and `/btw` start a forked side conversation. A local (temporary) side conversation
+  is `ephemeral` and writes no rollout, so it is also invisible. An **attached** side conversation
+  is a real rollout (`attached_thread`, source `tui_side_chat`, `forked_from_id`), so it is in
+  scope: it is attached to its parent session as a side artifact instead of being listed as a
+  separate session, and its turns never enter the parent's history, index, or size totals.
+
 ## Capability Rules
 
 - A weak agent is still useful if it contributes one reliable artifact type, for example read-only

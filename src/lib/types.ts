@@ -100,6 +100,8 @@ export interface SessionSummary {
   subagent_count: number;
   archive_name?: string | null;
   model_contexts?: SessionModelInfo[];
+  /** True only for an orphaned Codex side conversation (its parent session is gone). */
+  is_side_chat?: boolean;
 }
 
 export interface SessionProcessInfo {
@@ -350,6 +352,8 @@ export interface SubagentInfo {
   record_count: number;
   /** Parent agent for nested subagents; absent for direct children. */
   parent_agent_id?: string;
+  /** "side" for a saved Codex side conversation (/side, /btw); absent means a subagent. */
+  kind?: "side" | string;
 }
 
 export interface PriceRow {

@@ -287,6 +287,21 @@ const dict: Record<string, { zh: string; en: string }> = {
   "sess.levelContent": { zh: "对话", en: "Chat" },
   "sess.levelTool": { zh: "+工具", en: "+Tools" },
   "sess.latest": { zh: "最新", en: "Latest" },
+  "sess.sideChats": { zh: "旁路问答", en: "Side conversations" },
+  "sess.sideChatsHint": {
+    zh: "通过 /side 或 /btw 发起，不属于该会话的对话历史",
+    en: "Started with /side or /btw; not part of this session's history",
+  },
+  "sess.sideChatNotice": {
+    zh: "旁路会话：继承主会话上下文，但不会写入主对话历史。",
+    en: "Side conversation: inherits the main context but is not written into the main history.",
+  },
+  "sess.sideChatFromAgent": { zh: "来自子代理", en: "from subagent" },
+  "sess.sideChatBadge": { zh: "旁路", en: "side" },
+  "sess.sideChatOrphanHint": {
+    zh: "这条旁路问答的父会话已不存在，因此单独列出",
+    en: "This side conversation's parent session is gone, so it is listed on its own",
+  },
   "sess.subagentsN": { zh: "{n} 个子代理", en: "{n} subagents" },
   "sess.tailLoaded": { zh: "尾部加载", en: "Tail loaded" },
   "sess.unfavorite": { zh: "取消收藏", en: "Unfavorite" },
